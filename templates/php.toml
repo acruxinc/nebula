@@ -1,0 +1,36 @@
+[server]
+domain = "app.nebula.com"
+http_port = 8000
+https_port = 8443
+command = "php -S localhost:8000"
+hot_reload = false  # PHP scripts are interpreted on each request
+mode = "dev"
+
+[tls]
+cert_dir = "~/.local/share/nebula/certs"
+auto_generate = true
+ca_name = "Nebula Development CA"
+
+[dns]
+enabled = true
+port = 53
+cache_size = 1024
+upstream = ["8.8.8.8:53", "1.1.1.1:53"]
+
+[dhcp]
+enabled = false
+
+[scheduler]
+enabled = true
+default_tld = "xyz"
+dev_tld = "nebula.com"
+
+[dev]
+watch_patterns = ["**/*.php", "composer.json"]
+ignore_patterns = ["vendor/**/*", ".git/**/*"]
+restart_delay = 500
+auto_open_browser = false
+
+[dev.env]
+APP_ENV = "development"
+PHP_IDE_CONFIG = "serverName=nebula"

@@ -1,0 +1,36 @@
+[server]
+domain = "app.nebula.com"
+http_port = 8080
+https_port = 8443
+command = "npm run serve"
+hot_reload = true
+mode = "dev"
+
+[tls]
+cert_dir = "~/.local/share/nebula/certs"
+auto_generate = true
+ca_name = "Nebula Development CA"
+
+[dns]
+enabled = true
+port = 53
+cache_size = 1024
+upstream = ["8.8.8.8:53", "1.1.1.1:53"]
+
+[dhcp]
+enabled = false
+
+[scheduler]
+enabled = true
+default_tld = "xyz"
+dev_tld = "nebula.com"
+
+[dev]
+watch_patterns = ["src/**/*", "public/**/*"]
+ignore_patterns = ["node_modules/**/*", ".git/**/*", "dist/**/*"]
+restart_delay = 500
+auto_open_browser = true
+
+[dev.env]
+NODE_ENV = "development"
+VUE_APP_API_URL = "https://api.nebula.com"

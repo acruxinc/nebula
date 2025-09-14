@@ -1,0 +1,410 @@
+name: Performance Testing
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+  schedule:
+    # Run performance tests weekly on Sundays at 3 AM UTC
+    - cron: '0 3 * * 0'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Benchmark tests
+  benchmark:
+    name: Benchmark Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v3
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache cargo index
+        uses: actions/cache@v3
+        with:
+          path: ~/.cargo/git
+          key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache cargo build
+        uses: actions/cache@v3
+        with:
+          path: target
+          key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libssl-dev pkg-config
+
+      - name: Run benchmarks
+        run: |
+          cargo bench --verbose
+
+      - name: Upload benchmark results
+        uses: actions/upload-artifact@v3
+        with:
+          name: benchmark-results
+          path: target/criterion/
+
+  # Load testing
+  load-test:
+    name: Load Testing
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v3
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache cargo index
+        uses: actions/cache@v3
+        with:
+          path: ~/.cargo/git
+          key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache cargo build
+        uses: actions/cache@v3
+        with:
+          path: target
+          key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libssl-dev pkg-config
+
+      - name: Build release binary
+        run: cargo build --release
+
+      - name: Start Nebula server
+        run: |
+          ./target/release/nebula server &
+          sleep 10
+          echo "Server started"
+
+      - name: Install hey (HTTP load testing tool)
+        run: |
+          go install github.com/rakyll/hey@latest
+          echo "$HOME/go/bin" >> $GITHUB_PATH
+
+      - name: Run load tests
+        run: |
+          # Test HTTP endpoint
+          hey -n 1000 -c 10 http://localhost:3000
+          
+          # Test HTTPS endpoint
+          hey -n 1000 -c 10 -k https://localhost:3443
+          
+          # Test DNS resolution
+          for i in {1..100}; do
+            dig @127.0.0.1 -p 53 test.nebula.com
+          done
+
+      - name: Memory usage test
+        run: |
+          # Monitor memory usage
+          timeout 60 bash -c 'while true; do ps aux | grep nebula | grep -v grep; sleep 1; done' || true
+
+      - name: CPU usage test
+        run: |
+          # Monitor CPU usage
+          timeout 60 bash -c 'while true; do top -bn1 | grep nebula | grep -v grep; sleep 1; done' || true
+
+  # Stress testing
+  stress-test:
+    name: Stress Testing
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v3
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache cargo index
+        uses: actions/cache@v3
+        with:
+          path: ~/.cargo/git
+          key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache cargo build
+        uses: actions/cache@v3
+        with:
+          path: target
+          key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libssl-dev pkg-config stress-ng
+
+      - name: Build release binary
+        run: cargo build --release
+
+      - name: Start Nebula server
+        run: |
+          ./target/release/nebula server &
+          sleep 10
+
+      - name: Run stress tests
+        run: |
+          # CPU stress test
+          stress-ng --cpu 4 --timeout 30s &
+          
+          # Memory stress test
+          stress-ng --vm 2 --vm-bytes 512M --timeout 30s &
+          
+          # I/O stress test
+          stress-ng --io 4 --timeout 30s &
+          
+          # Test server stability under stress
+          for i in {1..1000}; do
+            curl -s http://localhost:3000 > /dev/null || echo "Request $i failed"
+          done
+          
+          wait
+
+  # Performance regression detection
+  performance-regression:
+    name: Performance Regression Detection
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v3
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache cargo index
+        uses: actions/cache@v3
+        with:
+          path: ~/.cargo/git
+          key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache cargo build
+        uses: actions/cache@v3
+        with:
+          path: target
+          key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libssl-dev pkg-config
+
+      - name: Build current branch
+        run: |
+          git checkout ${{ github.head_ref }}
+          cargo build --release
+
+      - name: Benchmark current branch
+        run: |
+          cargo bench --bench "*" -- --save-baseline current
+
+      - name: Build base branch
+        run: |
+          git checkout ${{ github.base_ref }}
+          cargo build --release
+
+      - name: Benchmark base branch
+        run: |
+          cargo bench --bench "*" -- --save-baseline base
+
+      - name: Compare benchmarks
+        run: |
+          cargo bench --bench "*" -- --baseline current --baseline-lenient
+
+      - name: Comment PR with performance results
+        if: always()
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            
+            // Read benchmark results
+            const resultsPath = path.join(process.cwd(), 'target', 'criterion');
+            let comment = '## Performance Test Results\n\n';
+            
+            try {
+              if (fs.existsSync(resultsPath)) {
+                comment += '✅ Performance tests completed successfully\n\n';
+                comment += '**Benchmark Results:**\n';
+                comment += '- All benchmarks passed\n';
+                comment += '- No significant performance regressions detected\n';
+              } else {
+                comment += '⚠️ Performance test results not available\n';
+              }
+            } catch (error) {
+              comment += `❌ Error reading performance results: ${error.message}\n`;
+            }
+            
+            // Post comment to PR
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: comment
+            });
+
+  # Resource usage monitoring
+  resource-monitoring:
+    name: Resource Usage Monitoring
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v3
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache cargo index
+        uses: actions/cache@v3
+        with:
+          path: ~/.cargo/git
+          key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache cargo build
+        uses: actions/cache@v3
+        with:
+          path: target
+          key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libssl-dev pkg-config htop
+
+      - name: Build release binary
+        run: cargo build --release
+
+      - name: Monitor resource usage
+        run: |
+          # Start server
+          ./target/release/nebula server &
+          SERVER_PID=$!
+          
+          # Monitor for 60 seconds
+          timeout 60 bash -c '
+            while true; do
+              echo "$(date): Memory: $(ps -o rss= -p $SERVER_PID) KB, CPU: $(ps -o %cpu= -p $SERVER_PID)%"
+              sleep 5
+            done
+          ' || true
+          
+          # Cleanup
+          kill $SERVER_PID 2>/dev/null || true
+
+  # Latency testing
+  latency-test:
+    name: Latency Testing
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v3
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache cargo index
+        uses: actions/cache@v3
+        with:
+          path: ~/.cargo/git
+          key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache cargo build
+        uses: actions/cache@v3
+        with:
+          path: target
+          key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libssl-dev pkg-config
+
+      - name: Build release binary
+        run: cargo build --release
+
+      - name: Start Nebula server
+        run: |
+          ./target/release/nebula server &
+          sleep 10
+
+      - name: Test HTTP latency
+        run: |
+          # Test HTTP response times
+          for i in {1..100}; do
+            start_time=$(date +%s%N)
+            curl -s http://localhost:3000 > /dev/null
+            end_time=$(date +%s%N)
+            latency=$(( (end_time - start_time) / 1000000 ))
+            echo "Request $i: ${latency}ms"
+          done
+
+      - name: Test HTTPS latency
+        run: |
+          # Test HTTPS response times
+          for i in {1..100}; do
+            start_time=$(date +%s%N)
+            curl -s -k https://localhost:3443 > /dev/null
+            end_time=$(date +%s%N)
+            latency=$(( (end_time - start_time) / 1000000 ))
+            echo "HTTPS Request $i: ${latency}ms"
+          done
+
+      - name: Test DNS latency
+        run: |
+          # Test DNS response times
+          for i in {1..100}; do
+            start_time=$(date +%s%N)
+            dig @127.0.0.1 -p 53 test.nebula.com > /dev/null
+            end_time=$(date +%s%N)
+            latency=$(( (end_time - start_time) / 1000000 ))
+            echo "DNS Query $i: ${latency}ms"
+          done

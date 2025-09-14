@@ -1,0 +1,36 @@
+[server]
+domain = "app.nebula.com"
+http_port = 8080
+https_port = 8443
+command = "go run ."
+hot_reload = false  # Go doesn't support hot reload without external tools
+mode = "dev"
+
+[tls]
+cert_dir = "~/.local/share/nebula/certs"
+auto_generate = true
+ca_name = "Nebula Development CA"
+
+[dns]
+enabled = true
+port = 53
+cache_size = 1024
+upstream = ["8.8.8.8:53", "1.1.1.1:53"]
+
+[dhcp]
+enabled = false
+
+[scheduler]
+enabled = true
+default_tld = "xyz"
+dev_tld = "nebula.com"
+
+[dev]
+watch_patterns = ["**/*.go", "go.mod", "go.sum"]
+ignore_patterns = [".git/**/*", "vendor/**/*"]
+restart_delay = 1500
+auto_open_browser = false
+
+[dev.env]
+GO111MODULE = "on"
+CGO_ENABLED = "1"

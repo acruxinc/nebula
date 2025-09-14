@@ -1,0 +1,38 @@
+[server]
+domain = "app.nebula.com"
+http_port = 8000
+https_port = 8443
+command = "python main.py"
+hot_reload = true
+mode = "dev"
+
+[tls]
+cert_dir = "~/.local/share/nebula/certs"
+auto_generate = true
+ca_name = "Nebula Development CA"
+
+[dns]
+enabled = true
+port = 53
+cache_size = 1024
+upstream = ["8.8.8.8:53", "1.1.1.1:53"]
+
+[dhcp]
+enabled = false
+
+[scheduler]
+enabled = true
+default_tld = "xyz"
+dev_tld = "nebula.com"
+
+[dev]
+watch_patterns = ["**/*.py", "templates/**/*", "static/**/*"]
+ignore_patterns = ["__pycache__/**/*", ".git/**/*", "*.pyc"]
+restart_delay = 1000
+auto_open_browser = false
+
+[dev.env]
+PYTHONPATH = "."
+PYTHONUNBUFFERED = "1"
+FLASK_ENV = "development"
+DJANGO_DEBUG = "True"
