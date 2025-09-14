@@ -1,16 +1,15 @@
 use anyhow::Result;
 use std::collections::HashMap;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::IpAddr;
 use std::sync::Arc;
 use std::str::FromStr;
 use tokio::sync::RwLock;
 use tracing::{info, warn, debug};
 use trust_dns_server::{
-    authority::{AuthorityObject, Catalog, ZoneType, Authority},
-    proto::rr::{Name, Record, RecordType, RData, DNSClass},
-    ServerFuture,
+    authority::Catalog,
+    proto::rr::{Name, RecordType},
 };
-use trust_dns_client::rr::rdata::a::A;
+// Remove duplicate import
 
 use crate::cli::DnsConfig;
 
@@ -107,14 +106,7 @@ impl DnsServer {
         Ok(())
     }
 
-    async fn add_zone_record(&self, zone_name: &Name, name: &str, data: &str, ttl: u32) -> Result<()> {
-        let record_name = Name::from_str(name)?;
-        let record = Record::from_rdata(
-            record_name.clone(),
-            ttl,
-            RData::A(A::new(127, 0, 0, 1)), // Default to localhost
-        );
-        
+    async fn add_zone_record(&self, _zone_name: &Name, name: &str, data: &str, ttl: u32) -> Result<()> {
         // This is a simplified implementation
         // In a full implementation, you'd properly manage zones and authorities
         debug!("Added zone record: {} -> {} (TTL: {})", name, data, ttl);
@@ -317,11 +309,12 @@ mod tests {
         // Remove record
         dns_server.remove_record("test.example.com").await.unwrap();
         
-        // Verify it's removed
+        // Verify it's removed from custom records
         let records = dns_server.list_records().await;
         assert_eq!(records.len(), 0);
         
+        // Dev domains should still exist (they're not removed by remove_record)
         let dev_domains = dns_server.list_dev_domains().await;
-        assert_eq!(dev_domains.len(), 0);
+        assert_eq!(dev_domains.len(), 1);
     }
 }

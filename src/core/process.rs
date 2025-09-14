@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::process::Stdio;
 use tokio::process::{Child, Command};
 use tokio::io::{AsyncBufReadExt, BufReader};
-use tracing::{info, warn, error};
+use tracing::{info, error};
 use std::collections::HashMap;
 
 pub struct DevProcess {

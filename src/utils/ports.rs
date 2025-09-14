@@ -2,7 +2,7 @@ use anyhow::Result;
 use std::net::{TcpListener, TcpStream, SocketAddr};
 use std::time::Duration;
 use tokio::time::timeout;
-use tracing::{debug, warn};
+use tracing::debug;
 
 pub struct PortManager;
 

@@ -3,7 +3,6 @@ use rcgen::{generate_simple_self_signed, Certificate, KeyPair};
 use std::fs;
 use std::path::PathBuf;
 use tracing::{info, warn, debug};
-use std::collections::HashMap;
 
 pub struct CertificateManager {
     cert_dir: PathBuf,
@@ -78,8 +77,8 @@ impl CertificateManager {
     }
 
     fn load_ca(&mut self, cert_path: &PathBuf, key_path: &PathBuf) -> Result<()> {
-        let cert_pem = fs::read_to_string(cert_path)?;
-        let key_pem = fs::read_to_string(key_path)?;
+        let _cert_pem = fs::read_to_string(cert_path)?;
+        let _key_pem = fs::read_to_string(key_path)?;
 
         // Note: This is simplified - in a real implementation you'd properly parse the PEM
         info!("✅ CA certificate loaded");
@@ -394,7 +393,7 @@ impl CertificateManager {
     }
 
     pub async fn cleanup_expired_certificates(&self) -> Result<()> {
-        use std::time::{SystemTime, UNIX_EPOCH};
+        use std::time::SystemTime;
         
         let mut expired_count = 0;
         
@@ -443,7 +442,6 @@ impl CertificateManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::TempDir;
 
     #[tokio::test]
     async fn test_certificate_manager_creation() {

@@ -25,7 +25,7 @@ pub fn init(verbose: bool) -> Result<()> {
 
     std::fs::create_dir_all(&log_dir)?;
     
-    let log_file = log_dir.join("nebula.log");
+    let _log_file = log_dir.join("nebula.log");
     let file_appender = tracing_appender::rolling::daily(&log_dir, "nebula.log");
     let file_layer = fmt::layer()
         .with_writer(file_appender)

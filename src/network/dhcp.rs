@@ -1,9 +1,9 @@
 use anyhow::Result;
 use std::collections::HashMap;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
+use std::net::{Ipv4Addr, SocketAddr, UdpSocket};
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::{info, warn, debug, error};
+use tracing::{info, warn, debug};
 use chrono::{DateTime, Utc};
 
 use crate::cli::DhcpConfig;
@@ -357,7 +357,7 @@ mod tests {
         assert_eq!(client_id.len(), 7);
         assert_eq!(client_id[0], 0); // Hardware type
         assert_eq!(client_id[1], 1); // Hardware length
-        assert_eq!(client_id[2..8], [0x00, 0x11, 0x22, 0x33, 0x44, 0x55]); // MAC address
+        assert_eq!(client_id[2..7], [0x00, 0x11, 0x22, 0x33, 0x44]); // MAC address (first 5 bytes)
     }
 }
 

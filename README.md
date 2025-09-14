@@ -1,6 +1,40 @@
-# 🌌 Nebula - Cross-Platform Development & Production Server
+# 🌌 Nebula - Cross-Platform Universal Development & Production Server
 
-A powerful cross-platform development and production server with built-in DNS, DHCP, TLS certificate management, and deployment scheduling.
+A powerful cross-platform universal development and production server that supports **any programming language and framework**. Nebula automatically detects your project type and provides built-in DNS, DHCP, TLS certificate management, and deployment scheduling with optimal configuration for your specific tech stack.
+
+## 🚀 Supported Languages & Frameworks
+
+Nebula automatically detects and supports a wide range of programming languages and frameworks:
+
+### Frontend Frameworks
+- **React** - Next.js, Create React App, Vite
+- **Vue** - Nuxt.js, Vue CLI, Vite  
+- **Angular** - Angular CLI, Nx
+- **Svelte** - SvelteKit, Vite
+- **JavaScript/TypeScript** - Node.js, Express, Fastify
+
+### Backend Languages
+- **Python** - Flask, Django, FastAPI, Streamlit
+- **Go** - Gin, Echo, Gorilla Mux
+- **Rust** - Actix-web, Axum, Warp, Rocket
+- **Java** - Spring Boot, Quarkus, Micronaut
+- **C#** - ASP.NET Core, Blazor
+- **PHP** - Laravel, Symfony, CodeIgniter
+- **Ruby** - Rails, Sinatra
+
+### Other Technologies
+- **Docker** - Docker Compose
+- **Scripts** - Bash, PowerShell
+- **Infrastructure** - Terraform, Ansible
+
+## 🎯 Smart Auto-Detection
+
+Simply run `nebula init` in any project directory and Nebula will:
+1. **Detect your project type** automatically
+2. **Configure optimal settings** for your language/framework
+3. **Set up environment variables** specific to your stack
+4. **Choose the right ports** and commands
+5. **Generate appropriate configuration** files
 
 ## Features
 
@@ -10,7 +44,8 @@ A powerful cross-platform development and production server with built-in DNS, D
 - 🔄 **Hot Reload** - Automatic restart on file changes  
 - 🖥️ **Cross-Platform** - Works on macOS, Linux, and Windows
 - ⚡ **Zero Configuration** - Works out of the box
-- 🎯 **Framework Agnostic** - Works with any development server
+- 🎯 **Universal Language Support** - Auto-detects and supports Python, Go, Rust, Java, C#, PHP, Ruby, JavaScript, TypeScript, React, Vue, Angular, and more
+- 🧠 **Smart Auto-Detection** - Automatically configures optimal settings for your specific language/framework
 - 🏠 **Custom Dev Domains** - Automatic `*.nebula.com` resolution
 
 ### Production Mode
@@ -34,15 +69,60 @@ iwr https://get.nebula.dev/install.ps1 | iex
 
 ### Usage
 
+#### Universal Language Support
+
+Nebula works with any programming language or framework. Simply run `nebula init` in your project directory:
+
 ```bash
-# Initialize in your project
+# For a Python Flask project
+cd my-flask-app
+nebula init  # Auto-detects Python/Flask and configures accordingly
+
+# For a Go web service  
+cd my-go-service
+nebula init  # Auto-detects Go and configures Gin/Echo/etc.
+
+# For a React application
+cd my-react-app  
+nebula init  # Auto-detects React and configures npm/yarn
+
+# For a Rust web server
+cd my-rust-api
+nebula init  # Auto-detects Rust and configures Actix-web/Axum
+
+# For a Java Spring Boot app
+cd my-spring-app
+nebula init  # Auto-detects Java and configures Spring Boot
+
+# For any other language/framework
+nebula init  # Works with PHP, Ruby, C#, Vue, Angular, Svelte, etc.
+```
+
+#### Development Mode
+
+```bash
+# Initialize Nebula (auto-detects your project type)
 nebula init
 
-# Start development server (uses *.nebula.com domains)
+# Start development server (uses optimal settings for your language/framework)
 nebula start
 
-# Or run directly with custom domain
-nebula --domain myapp.nebula.com --command "npm run dev"
+# Your app will be available at:
+# HTTP:  http://app.nebula.com:[detected-port]
+# HTTPS: https://app.nebula.com:[https-port]
+```
+
+#### Production Deployment
+
+```bash
+# Create a deployment (works with any built application)
+nebula deploy create my-app ./dist --tld xyz
+
+# Start the deployment
+nebula deploy start my-app
+
+# Your app will be available at:
+# HTTPS: https://my-app.xyz
 ```
 
 ## Commands

@@ -1,12 +1,11 @@
 use anyhow::Result;
-use clap::Subcommand;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use tracing::{info, error};
+use tracing::{info, error, warn};
 
 use crate::cli::{Commands, CertCommands, DnsCommands, DeployCommands};
 use crate::core::NebulaServer;
-use crate::utils::certificates::CertificateManager;
+use crate::utils::{CertificateManager, LanguageDetector, ProjectInfo, Language};
 use crate::network::dns::DnsServer;
 
 impl Commands {
@@ -46,13 +45,41 @@ impl Commands {
 async fn init_command(template: Option<String>) -> Result<()> {
     info!("🌌 Initializing Nebula in current directory...");
     
-    let config_content = match template.as_deref() {
-        Some("react") => include_str!("../../templates/react.toml"),
-        Some("vue") => include_str!("../../templates/vue.toml"),
-        Some("svelte") => include_str!("../../templates/svelte.toml"),
-        Some("next") => include_str!("../../templates/next.toml"),
-        _ => include_str!("../../templates/default.toml"),
+    let current_dir = std::env::current_dir()?;
+    
+    // Auto-detect project type if no template specified
+    let (template_name, project_info) = if let Some(template) = template {
+        (template, None)
+    } else {
+        info!("🔍 Auto-detecting project type...");
+        match LanguageDetector::detect_language(&current_dir) {
+            Ok(info) => {
+                let template_name = match info.language {
+                    Language::React | Language::NextJs => "react",
+                    Language::Vue | Language::NuxtJs => "vue", 
+                    Language::Svelte => "svelte",
+                    Language::Python => "python",
+                    Language::Go => "go",
+                    Language::Rust => "rust",
+                    Language::Java => "java",
+                    Language::CSharp => "csharp",
+                    Language::PHP => "php",
+                    Language::Ruby => "ruby",
+                    Language::NodeJs | Language::JavaScript | Language::TypeScript => "nodejs",
+                    _ => "default",
+                };
+                info!("✅ Detected project type: {:?} with framework: {:?}", 
+                      info.language, info.framework);
+                (template_name.to_string(), Some(info))
+            }
+            Err(e) => {
+                warn!("Could not auto-detect project type: {}", e);
+                ("default".to_string(), None)
+            }
+        }
     };
+    
+    let config_content = generate_config_for_template(&template_name, project_info.as_ref())?;
 
     std::fs::write("nebula.toml", config_content)?;
     
@@ -68,11 +95,80 @@ async fn init_command(template: Option<String>) -> Result<()> {
         std::fs::write(&gitignore_path, "# Nebula\n.nebula/\nnebula.log\n")?;
     }
 
-    info!("✅ Nebula configuration created!");
+    info!("✅ Nebula configuration created for {}", template_name);
     info!("💡 Edit nebula.toml to customize settings");
     info!("🚀 Run 'nebula start' to begin development");
     
     Ok(())
+}
+
+fn generate_config_for_template(template_name: &str, project_info: Option<&ProjectInfo>) -> Result<String> {
+    let base_config = match template_name {
+        "react" => include_str!("../../templates/react.toml"),
+        "vue" => include_str!("../../templates/vue.toml"),
+        "svelte" => include_str!("../../templates/svelte.toml"),
+        "next" => include_str!("../../templates/next.toml"),
+        "python" => include_str!("../../templates/python.toml"),
+        "go" => include_str!("../../templates/go.toml"),
+        "rust" => include_str!("../../templates/rust.toml"),
+        "java" => include_str!("../../templates/java.toml"),
+        "csharp" => include_str!("../../templates/csharp.toml"),
+        "php" => include_str!("../../templates/php.toml"),
+        "ruby" => include_str!("../../templates/ruby.toml"),
+        "nodejs" => include_str!("../../templates/nodejs.toml"),
+        _ => include_str!("../../templates/default.toml"),
+    };
+
+    // If we have project info, customize the config
+    if let Some(info) = project_info {
+        let mut config = base_config.to_string();
+        
+        // Update command if we have a better one from detection
+        if let Some(ref dev_cmd) = info.dev_command {
+            config = config.replace("command = \"npm run dev\"", &format!("command = \"{}\"", dev_cmd));
+        } else {
+            let default_cmd = info.get_default_dev_command();
+            config = config.replace("command = \"npm run dev\"", &format!("command = \"{}\"", default_cmd));
+        }
+        
+        // Update port if detected
+        if let Some(port) = info.port {
+            config = config.replace("http_port = 3000", &format!("http_port = {}", port));
+        } else {
+            let default_port = info.get_default_port();
+            config = config.replace("http_port = 3000", &format!("http_port = {}", default_port));
+        }
+        
+        // Add language-specific environment variables
+        match info.language {
+            Language::Python => {
+                config.push_str("\n[dev.env]\nPYTHONPATH = \".\"\n");
+            }
+            Language::Go => {
+                config.push_str("\n[dev.env]\nGO111MODULE = \"on\"\n");
+            }
+            Language::Rust => {
+                config.push_str("\n[dev.env]\nRUST_LOG = \"debug\"\n");
+            }
+            Language::Java => {
+                config.push_str("\n[dev.env]\nJAVA_OPTS = \"-Dspring.profiles.active=dev\"\n");
+            }
+            Language::CSharp => {
+                config.push_str("\n[dev.env]\nASPNETCORE_ENVIRONMENT = \"Development\"\n");
+            }
+            Language::PHP => {
+                config.push_str("\n[dev.env]\nAPP_ENV = \"development\"\n");
+            }
+            Language::Ruby => {
+                config.push_str("\n[dev.env]\nRAILS_ENV = \"development\"\n");
+            }
+            _ => {}
+        }
+        
+        Ok(config)
+    } else {
+        Ok(base_config.to_string())
+    }
 }
 
 async fn setup_command() -> Result<()> {
@@ -271,7 +367,6 @@ async fn clean_command() -> Result<()> {
 
 async fn deploy_command(action: DeployCommands) -> Result<()> {
     use crate::core::scheduler::{NebulaScheduler, SchedulerConfig, DeploymentConfig};
-    use std::collections::HashMap;
     
     let config = SchedulerConfig::default();
     let scheduler = NebulaScheduler::new(config).await?;

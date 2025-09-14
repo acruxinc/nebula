@@ -68,7 +68,7 @@ impl ServerState {
         }
 
         let content = fs::read_to_string(info_file)?;
-        let server_info: serde_json::Value = serde_json::from_str(&content)?;
+        let _server_info: serde_json::Value = serde_json::from_str(&content)?;
 
         // Basic state loading - you might want to expand this
         info!("📂 Loaded previous server state");

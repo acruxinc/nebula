@@ -5,7 +5,6 @@ use nebula::utils::certificates::CertificateManager;
 use std::net::{IpAddr, Ipv4Addr};
 use std::path::PathBuf;
 use tempfile::TempDir;
-use tokio::time::{sleep, Duration};
 
 #[tokio::test]
 async fn test_dns_server_creation() {
@@ -189,7 +188,7 @@ async fn test_scheduler_deployment_lifecycle() {
 
 #[tokio::test]
 async fn test_certificate_manager() {
-    let temp_dir = TempDir::new().unwrap();
+    let _temp_dir = TempDir::new().unwrap();
     let cert_manager = CertificateManager::new().await;
     assert!(cert_manager.is_ok(), "Certificate manager should be created successfully");
     
@@ -218,7 +217,7 @@ async fn test_config_creation() {
         domain: "test.nebula.com".to_string(),
         http_port: 3000,
         https_port: 3443,
-        command: "npm run dev".to_string(),
+        dev_command: "npm run dev".to_string(),
         project_dir: None,
         force_certs: false,
         no_dns: false,
@@ -244,7 +243,7 @@ async fn test_cross_platform_compatibility() {
         domain: "test.nebula.com".to_string(),
         http_port: 3000,
         https_port: 3443,
-        command: "echo 'test'".to_string(),
+        dev_command: "echo 'test'".to_string(),
         project_dir: None,
         force_certs: false,
         no_dns: false,

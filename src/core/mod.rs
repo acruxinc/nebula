@@ -86,7 +86,7 @@ impl NebulaServer {
         proxy.start().await?;
 
         // Start development command
-        let dev_process = process::DevProcess::new(&config.command, config.project_dir.clone())?;
+        let dev_process = process::DevProcess::new(&config.dev_command, config.project_dir.clone())?;
         let _dev_handle = dev_process.start().await?;
 
         info!("🚀 Nebula is ready!");

@@ -31,9 +31,9 @@ impl TlsManager {
         // Load private key
         let key_file = File::open(key_path)?;
         let mut key_reader = BufReader::new(key_file);
-        let private_key = match rustls_pemfile::private_key(&mut key_reader)? {
-            Some(key) => PrivateKey(key),
-            None => return Err(anyhow::anyhow!("No private key found")),
+        let private_key = match rustls_pemfile::read_one(&mut key_reader)? {
+            Some(rustls_pemfile::Item::RSAKey(key) | rustls_pemfile::Item::PKCS8Key(key) | rustls_pemfile::Item::ECKey(key)) => PrivateKey(key),
+            _ => return Err(anyhow::anyhow!("No private key found")),
         };
 
         // Create TLS configuration
