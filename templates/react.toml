@@ -1,0 +1,40 @@
+[server]
+domain = "app.nebula.com"
+http_port = 3000
+https_port = 3443
+command = "npm start"
+hot_reload = true
+mode = "dev"
+
+[tls]
+cert_dir = "~/.local/share/nebula/certs"
+auto_generate = true
+ca_name = "Nebula Development CA"
+
+[dns]
+enabled = true
+port = 53
+cache_size = 1024
+upstream = ["8.8.8.8:53", "1.1.1.1:53"]
+
+[dhcp]
+enabled = false
+range_start = "192.168.100.100"
+range_end = "192.168.100.200"
+lease_time = 86400
+
+[scheduler]
+enabled = true
+default_tld = "xyz"
+dev_tld = "nebula.com"
+storage_path = "~/.local/share/nebula/scheduler"
+max_concurrent_deployments = 10
+
+[logging]
+level = "info"
+file = "~/.local/share/nebula/logs/nebula.log"
+
+[dev]
+watch_patterns = ["src/**/*", "public/**/*"]
+ignore_patterns = ["node_modules/**/*", ".git/**/*", "build/**/*"]
+restart_delay = 500
