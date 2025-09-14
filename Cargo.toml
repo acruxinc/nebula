@@ -1,43 +1,88 @@
 [package]
 name = "nebula"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
+authors = ["Shaik Baleeghuddin Kashif <kashif@sbkashif.com>"]
+description = "Cross-platform universal development and production server"
+license = "MIT"
+repository = "https://github.com/acruxinc/nebula"
 
 [[bin]]
 name = "nebula"
 path = "src/main.rs"
 
 [dependencies]
-tokio = { version = "1.0", features = ["full"] }
-clap = { version = "4.0", features = ["derive"] }
+# Async runtime
+tokio = { version = "1.35", features = ["full"] }
+
+# CLI
+clap = { version = "4.4", features = ["derive", "env"] }
+
+# Serialization
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 toml = "0.8"
+
+# Error handling
 anyhow = "1.0"
 thiserror = "1.0"
+
+# Logging
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+tracing-appender = "0.2"
+
+# HTTP/HTTPS
 hyper = { version = "0.14", features = ["full"] }
-hyper-tls = "0.5"
+hyper-rustls = "0.24"
 rustls = "0.21"
 rustls-pemfile = "1.0"
-trust-dns-server = "0.22"
+tokio-rustls = "0.24"
+
+# DNS
+trust-dns-server = { version = "0.22", features = ["dnssec"] }
 trust-dns-client = "0.22"
-rcgen = "0.11"
-notify = "6.0"
-walkdir = "2.0"
-uuid = { version = "1.0", features = ["v4"] }
+trust-dns-proto = "0.22"
+
+# Certificates
+rcgen = { version = "0.11", features = ["pem", "x509-parser"] }
+x509-parser = "0.15"
+
+# File watching
+notify = { version = "6.1", features = ["macos_fsevent"] }
+
+# Utilities
+uuid = { version = "1.6", features = ["v4", "serde"] }
 dirs = "5.0"
-which = "4.0"
+which = "4.4"
 chrono = { version = "0.4", features = ["serde"] }
-tracing-appender = "0.2"
-regex = "1.0"
+regex = "1.10"
+walkdir = "2.4"
+futures = "0.3"
+parking_lot = "0.12"
+
+# Network utilities
+socket2 = "0.5"
+local-ip-address = "0.5"
 
 [target.'cfg(windows)'.dependencies]
-winapi = { version = "0.3", features = ["winuser", "processthreadsapi"] }
+winapi = { version = "0.3", features = [
+    "winuser", "processthreadsapi", "securitybaseapi", 
+    "winnt", "handleapi", "winsock2", "ws2tcpip"
+] }
+widestring = "1.0"
 
 [target.'cfg(unix)'.dependencies]
-nix = { version = "0.27", features = ["signal", "process", "user"] }
+nix = { version = "0.27", features = ["signal", "process", "user", "socket"] }
+libc = "0.2"
 
 [dev-dependencies]
-tempfile = "3.0"
+tempfile = "3.8"
+tokio-test = "0.4"
+mockall = "0.12"
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

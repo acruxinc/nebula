@@ -1,7 +1,7 @@
 [server]
 domain = "app.nebula.com"
-http_port = 3000
-https_port = 3443
+http_port = 8080
+https_port = 8443
 command = "npm run serve"
 hot_reload = true
 mode = "dev"
@@ -19,22 +19,18 @@ upstream = ["8.8.8.8:53", "1.1.1.1:53"]
 
 [dhcp]
 enabled = false
-range_start = "192.168.100.100"
-range_end = "192.168.100.200"
-lease_time = 86400
 
 [scheduler]
 enabled = true
 default_tld = "xyz"
 dev_tld = "nebula.com"
-storage_path = "~/.local/share/nebula/scheduler"
-max_concurrent_deployments = 10
-
-[logging]
-level = "info"
-file = "~/.local/share/nebula/logs/nebula.log"
 
 [dev]
 watch_patterns = ["src/**/*", "public/**/*"]
 ignore_patterns = ["node_modules/**/*", ".git/**/*", "dist/**/*"]
 restart_delay = 500
+auto_open_browser = true
+
+[dev.env]
+NODE_ENV = "development"
+VUE_APP_API_URL = "https://api.nebula.com"

@@ -19,22 +19,18 @@ upstream = ["8.8.8.8:53", "1.1.1.1:53"]
 
 [dhcp]
 enabled = false
-range_start = "192.168.100.100"
-range_end = "192.168.100.200"
-lease_time = 86400
 
 [scheduler]
 enabled = true
 default_tld = "xyz"
 dev_tld = "nebula.com"
-storage_path = "~/.local/share/nebula/scheduler"
-max_concurrent_deployments = 10
-
-[logging]
-level = "info"
-file = "~/.local/share/nebula/logs/nebula.log"
 
 [dev]
-watch_patterns = ["**/*.js", "**/*.ts", "package.json"]
-ignore_patterns = [".git/**/*", "node_modules/**/*", "dist/**/*", "build/**/*"]
+watch_patterns = ["src/**/*", "lib/**/*", "index.js", "app.js", "server.js"]
+ignore_patterns = ["node_modules/**/*", ".git/**/*", "dist/**/*", "build/**/*"]
 restart_delay = 500
+auto_open_browser = false
+
+[dev.env]
+NODE_ENV = "development"
+DEBUG = "*"

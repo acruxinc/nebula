@@ -1,0 +1,40 @@
+# Global code owners
+* @acruxinc
+
+# Core functionality
+/src/core/ @acruxinc @kashifsb
+/src/network/ @acruxinc @kashifsb
+/src/cli/ @acruxinc @kashifsb
+
+# Security-critical components
+/src/network/tls.rs @acruxinc @kashifsb
+/src/utils/certificates.rs @acruxinc @kashifsb
+/src/platform/ @acruxinc @kashifsb
+
+# Documentation
+README.md @acruxinc @kashifsb
+docs/ @kashifsb
+*.md @kashifsb
+
+# Configuration
+config/ @acruxinc @kashifsb
+*.toml @kashifsb
+
+# CI/CD and workflows
+.github/ @acruxinc @kashifsb
+scripts/ @acruxinc @kashifsb
+
+# Build configuration
+Cargo.toml @acruxinc @kashifsb
+Makefile @acruxinc @kashifsb
+
+# Tests
+tests/ @acruxinc @kashifsb
+src/**/*test*.rs @kashifsb
+
+# Templates
+templates/ @acruxinc @kashifsb
+
+# Install scripts
+scripts/install.sh @acruxinc @kashifsb
+scripts/install.ps1 @acruxinc @kashifsb

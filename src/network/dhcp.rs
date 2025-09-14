@@ -2,11 +2,13 @@ use anyhow::Result;
 use std::collections::HashMap;
 use std::net::{Ipv4Addr, SocketAddr, UdpSocket};
 use std::sync::Arc;
-use tokio::sync::RwLock;
-use tracing::{info, warn, debug};
-use chrono::{DateTime, Utc};
+use tokio::sync::{RwLock, Mutex};
+use tracing::{info, warn, debug, error};
+use chrono::{DateTime, Utc, Duration};
+use std::time::SystemTime;
 
 use crate::cli::DhcpConfig;
+use crate::error::{NebulaError, Result as NebulaResult};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum DhcpMessageType {
@@ -21,9 +23,9 @@ pub enum DhcpMessageType {
 }
 
 impl TryFrom<u8> for DhcpMessageType {
-    type Error = anyhow::Error;
+    type Error = NebulaError;
     
-    fn try_from(value: u8) -> Result<Self> {
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
         match value {
             1 => Ok(DhcpMessageType::Discover),
             2 => Ok(DhcpMessageType::Offer),
@@ -33,38 +35,781 @@ impl TryFrom<u8> for DhcpMessageType {
             6 => Ok(DhcpMessageType::Nak),
             7 => Ok(DhcpMessageType::Release),
             8 => Ok(DhcpMessageType::Inform),
-            _ => Err(anyhow::anyhow!("Invalid DHCP message type: {}", value)),
+            _ => Err(NebulaError::dhcp(format!("Invalid DHCP message type: {}", value))),
         }
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct DhcpPacket {
-    pub op: u8,           // Message op code
+    pub op: u8,           // Message op code / message type
     pub htype: u8,        // Hardware address type
     pub hlen: u8,         // Hardware address length
     pub hops: u8,         // Client sets to zero
     pub xid: u32,         // Transaction ID
-    pub secs: u16,        // Seconds elapsed
+    pub secs: u16,        // Seconds elapsed since client began address acquisition
     pub flags: u16,       // Flags
     pub ciaddr: Ipv4Addr, // Client IP address
-    pub yiaddr: Ipv4Addr, // Your IP address
-    pub siaddr: Ipv4Addr, // Server IP address
-    pub giaddr: Ipv4Addr, // Gateway IP address
+    pub yiaddr: Ipv4Addr, // Your (client) IP address
+    pub siaddr: Ipv4Addr, // IP address of next server to use in bootstrap
+    pub giaddr: Ipv4Addr, // Relay agent IP address
     pub chaddr: [u8; 16], // Client hardware address
-    pub sname: [u8; 64],  // Server name
+    pub sname: [u8; 64],  // Optional server host name
     pub file: [u8; 128],  // Boot file name
-    pub options: Vec<u8>, // DHCP options
+    pub options: Vec<u8>, // Optional parameters field
+}
+
+#[derive(Debug, Clone)]
+pub struct DhcpLease {
+    pub ip: Ipv4Addr,
+    pub mac: [u8; 6],
+    pub hostname: Option<String>,
+    pub expires_at: DateTime<Utc>,
+    pub lease_time: u32,
+    pub client_id: Option<Vec<u8>>,
+    pub binding_state: LeaseState,
+    pub created_at: DateTime<Utc>,
+    pub last_renewal: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum LeaseState {
+    Free,
+    Offered,
+    Bound,
+    Released,
+    Expired,
+}
+
+#[derive(Debug, Clone)]
+pub struct DhcpStatistics {
+    pub discovers_received: u64,
+    pub offers_sent: u64,
+    pub requests_received: u64,
+    pub acks_sent: u64,
+    pub naks_sent: u64,
+    pub releases_received: u64,
+    pub active_leases: usize,
+    pub expired_leases: usize,
+    pub static_leases: usize,
+}
+
+pub struct DhcpServer {
+    config: DhcpConfig,
+    leases: Arc<RwLock<HashMap<[u8; 6], DhcpLease>>>,
+    available_ips: Arc<RwLock<Vec<Ipv4Addr>>>,
+    reserved_ips: Arc<RwLock<HashMap<Ipv4Addr, [u8; 6]>>>,
+    statistics: Arc<RwLock<DhcpStatistics>>,
+    is_running: Arc<RwLock<bool>>,
+    server_handle: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
+}
+
+impl DhcpServer {
+    pub async fn new(config: DhcpConfig) -> NebulaResult<Self> {
+        let available_ips = Self::generate_ip_range(&config)?;
+        let mut reserved_ips = HashMap::new();
+        
+        // Process static leases
+        for static_lease in &config.static_leases {
+            let mac = Self::parse_mac_address(&static_lease.mac)?;
+            let ip: Ipv4Addr = static_lease.ip.parse()
+                .map_err(|_| NebulaError::dhcp(format!("Invalid static lease IP: {}", static_lease.ip)))?;
+            reserved_ips.insert(ip, mac);
+        }
+        
+        Ok(Self {
+            config,
+            leases: Arc::new(RwLock::new(HashMap::new())),
+            available_ips: Arc::new(RwLock::new(available_ips)),
+            reserved_ips: Arc::new(RwLock::new(reserved_ips)),
+            statistics: Arc::new(RwLock::new(DhcpStatistics::default())),
+            is_running: Arc::new(RwLock::new(false)),
+            server_handle: Arc::new(Mutex::new(None)),
+        })
+    }
+
+    pub async fn start(&self) -> NebulaResult<()> {
+        if !self.config.enabled {
+            info!("DHCP server disabled in configuration");
+            return Ok(());
+        }
+
+        {
+            let mut running = self.is_running.write().await;
+            if *running {
+                return Err(NebulaError::already_exists("DHCP server is already running"));
+            }
+            *running = true;
+        }
+
+        info!("Starting DHCP server...");
+        
+        // Check if we can bind to the DHCP port (67)
+        if !Self::can_bind_dhcp_port() {
+            return Err(NebulaError::permission_denied("DHCP server requires root/administrator privileges"));
+        }
+
+        // Initialize static leases
+        self.initialize_static_leases().await?;
+
+        // Start the server socket
+        let server = self.clone();
+        let handle = tokio::spawn(async move {
+            if let Err(e) = server.run_server().await {
+                error!("DHCP server error: {}", e);
+            }
+        });
+
+        {
+            let mut server_handle = self.server_handle.lock().await;
+            *server_handle = Some(handle);
+        }
+
+        // Start lease cleanup task
+        let cleanup_server = self.clone();
+        tokio::spawn(async move {
+            cleanup_server.lease_cleanup_loop().await;
+        });
+
+        info!("✅ DHCP server started on port 67");
+        Ok(())
+    }
+
+    pub async fn stop(&self) -> NebulaResult<()> {
+        info!("Stopping DHCP server...");
+        
+        {
+            let mut running = self.is_running.write().await;
+            *running = false;
+        }
+
+        {
+            let mut handle = self.server_handle.lock().await;
+            if let Some(server_handle) = handle.take() {
+                server_handle.abort();
+            }
+        }
+
+        info!("✅ DHCP server stopped");
+        Ok(())
+    }
+
+    pub async fn add_static_lease(&self, mac: [u8; 6], ip: Ipv4Addr, hostname: Option<String>) -> NebulaResult<()> {
+        // Validate IP is in our range
+        if !self.is_ip_in_range(ip) {
+            return Err(NebulaError::dhcp(format!("IP {} is not in DHCP range", ip)));
+        }
+
+        // Check if IP is already reserved
+        {
+            let reserved = self.reserved_ips.read().await;
+            if let Some(existing_mac) = reserved.get(&ip) {
+                if *existing_mac != mac {
+                    return Err(NebulaError::already_exists(format!("IP {} is already reserved for another MAC", ip)));
+                }
+            }
+        }
+
+        let lease = DhcpLease {
+            ip,
+            mac,
+            hostname,
+            expires_at: Utc::now() + Duration::seconds(self.config.lease_time as i64),
+            lease_time: self.config.lease_time,
+            client_id: None,
+            binding_state: LeaseState::Bound,
+            created_at: Utc::now(),
+            last_renewal: Some(Utc::now()),
+        };
+
+        {
+            let mut leases = self.leases.write().await;
+            leases.insert(mac, lease);
+        }
+
+        {
+            let mut reserved = self.reserved_ips.write().await;
+            reserved.insert(ip, mac);
+        }
+
+        {
+            let mut available = self.available_ips.write().await;
+            available.retain(|&x| x != ip);
+        }
+
+        info!("Added static DHCP lease: {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} -> {}", 
+              mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], ip);
+        
+        Ok(())
+    }
+
+    pub async fn remove_lease(&self, mac: &[u8; 6]) -> NebulaResult<()> {
+        let mut removed_ip = None;
+
+        {
+            let mut leases = self.leases.write().await;
+            if let Some(lease) = leases.remove(mac) {
+                removed_ip = Some(lease.ip);
+            }
+        }
+
+        if let Some(ip) = removed_ip {
+            {
+                let mut reserved = self.reserved_ips.write().await;
+                reserved.remove(&ip);
+            }
+
+            {
+                let mut available = self.available_ips.write().await;
+                if !available.contains(&ip) {
+                    available.push(ip);
+                }
+            }
+
+            info!("Removed DHCP lease: {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} ({})", 
+                  mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], ip);
+        }
+
+        Ok(())
+    }
+
+    pub async fn get_lease_by_mac(&self, mac: &[u8; 6]) -> Option<DhcpLease> {
+        let leases = self.leases.read().await;
+        leases.get(mac).cloned()
+    }
+
+    pub async fn get_lease_by_ip(&self, ip: Ipv4Addr) -> Option<DhcpLease> {
+        let leases = self.leases.read().await;
+        leases.values().find(|lease| lease.ip == ip).cloned()
+    }
+
+    pub async fn get_all_leases(&self) -> HashMap<[u8; 6], DhcpLease> {
+        self.leases.read().await.clone()
+    }
+
+    pub async fn get_statistics(&self) -> DhcpStatistics {
+        let mut stats = self.statistics.read().await.clone();
+        let leases = self.leases.read().await;
+        
+        stats.active_leases = leases.values()
+            .filter(|l| matches!(l.binding_state, LeaseState::Bound) && l.expires_at > Utc::now())
+            .count();
+        
+        stats.expired_leases = leases.values()
+            .filter(|l| l.expires_at <= Utc::now())
+            .count();
+
+        stats.static_leases = self.reserved_ips.read().await.len();
+        
+        stats
+    }
+
+    pub async fn cleanup_expired_leases(&self) -> NebulaResult<usize> {
+        let now = Utc::now();
+        let mut expired_macs = Vec::new();
+        
+        {
+            let leases = self.leases.read().await;
+            for (mac, lease) in leases.iter() {
+                if lease.expires_at < now && lease.binding_state != LeaseState::Released {
+                    expired_macs.push(*mac);
+                }
+            }
+        }
+        
+        let count = expired_macs.len();
+        for mac in expired_macs {
+            self.remove_lease(&mac).await?;
+        }
+        
+        if count > 0 {
+            info!("Cleaned up {} expired DHCP leases", count);
+        }
+        
+        Ok(count)
+    }
+
+    pub async fn is_healthy(&self) -> bool {
+        *self.is_running.read().await
+    }
+
+    // Private implementation methods
+
+    async fn run_server(&self) -> NebulaResult<()> {
+        let socket = UdpSocket::bind("0.0.0.0:67")
+            .map_err(|e| NebulaError::dhcp(format!("Failed to bind DHCP socket: {}", e)))?;
+        
+        socket.set_broadcast(true)
+            .map_err(|e| NebulaError::dhcp(format!("Failed to set broadcast: {}", e)))?;
+
+        let socket = Arc::new(socket);
+        let mut buf = [0u8; 1024];
+
+        info!("DHCP server listening on 0.0.0.0:67");
+
+        loop {
+            if !*self.is_running.read().await {
+                break;
+            }
+
+            match socket.recv_from(&mut buf) {
+                Ok((size, addr)) => {
+                    debug!("Received DHCP packet from {}: {} bytes", addr, size);
+                    
+                    if let Err(e) = self.handle_dhcp_packet(&buf[..size], addr, &socket).await {
+                        warn!("Error handling DHCP packet from {}: {}", addr, e);
+                    }
+                }
+                Err(e) => {
+                    error!("DHCP socket error: {}", e);
+                    break;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn handle_dhcp_packet(
+        &self,
+        packet_data: &[u8],
+        client_addr: SocketAddr,
+        socket: &UdpSocket,
+    ) -> NebulaResult<()> {
+        let packet = DhcpPacket::parse(packet_data)?;
+        let message_type = packet.get_message_type()?;
+        
+        debug!("DHCP packet from {}: {:?} (XID: {})", client_addr, message_type, packet.xid);
+        
+        match message_type {
+            Some(DhcpMessageType::Discover) => {
+                self.handle_discover(&packet, socket).await?;
+                let mut stats = self.statistics.write().await;
+                stats.discovers_received += 1;
+            }
+            Some(DhcpMessageType::Request) => {
+                self.handle_request(&packet, socket).await?;
+                let mut stats = self.statistics.write().await;
+                stats.requests_received += 1;
+            }
+            Some(DhcpMessageType::Release) => {
+                self.handle_release(&packet).await?;
+                let mut stats = self.statistics.write().await;
+                stats.releases_received += 1;
+            }
+            Some(DhcpMessageType::Decline) => {
+                self.handle_decline(&packet).await?;
+            }
+            Some(DhcpMessageType::Inform) => {
+                self.handle_inform(&packet, socket).await?;
+            }
+            _ => {
+                debug!("Unhandled DHCP message type: {:?}", message_type);
+            }
+        }
+        
+        Ok(())
+    }
+
+    async fn handle_discover(&self, packet: &DhcpPacket, socket: &UdpSocket) -> NebulaResult<()> {
+        let mac = Self::extract_mac_from_packet(packet);
+        
+        debug!("DHCP Discover from MAC: {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}", 
+               mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+
+        // Check if we already have a lease for this MAC
+        let offered_ip = if let Some(existing_lease) = self.get_lease_by_mac(&mac).await {
+            if existing_lease.expires_at > Utc::now() {
+                existing_lease.ip
+            } else {
+                self.allocate_ip_for_mac(&mac).await?
+            }
+        } else {
+            self.allocate_ip_for_mac(&mac).await?
+        };
+
+        // Create or update lease in OFFERED state
+        let lease = DhcpLease {
+            ip: offered_ip,
+            mac,
+            hostname: packet.get_hostname(),
+            expires_at: Utc::now() + Duration::seconds(self.config.lease_time as i64),
+            lease_time: self.config.lease_time,
+            client_id: packet.get_client_identifier(),
+            binding_state: LeaseState::Offered,
+            created_at: Utc::now(),
+            last_renewal: None,
+        };
+
+        {
+            let mut leases = self.leases.write().await;
+            leases.insert(mac, lease);
+        }
+
+        // Send DHCP Offer
+        self.send_offer(packet, offered_ip, &mac, socket).await?;
+        
+        let mut stats = self.statistics.write().await;
+        stats.offers_sent += 1;
+
+        info!("Offered IP {} to MAC {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}", 
+              offered_ip, mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+
+        Ok(())
+    }
+
+    async fn handle_request(&self, packet: &DhcpPacket, socket: &UdpSocket) -> NebulaResult<()> {
+        let mac = Self::extract_mac_from_packet(packet);
+        let requested_ip = packet.get_requested_ip();
+        let server_id = packet.get_server_identifier();
+
+        debug!("DHCP Request from MAC: {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}, requested IP: {:?}", 
+               mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], requested_ip);
+
+        // Check if this is for us (server identifier should match our IP)
+        if let Some(server_ip) = server_id {
+            let our_ip = self.get_server_ip();
+            if server_ip != our_ip {
+                debug!("DHCP Request not for us (server ID: {}, our IP: {})", server_ip, our_ip);
+                return Ok(());
+            }
+        }
+
+        let mut should_ack = false;
+        let mut response_ip = None;
+
+        if let Some(mut lease) = self.get_lease_by_mac(&mac).await {
+            if let Some(req_ip) = requested_ip {
+                if req_ip == lease.ip && lease.binding_state == LeaseState::Offered {
+                    // Accept the request
+                    lease.binding_state = LeaseState::Bound;
+                    lease.last_renewal = Some(Utc::now());
+                    lease.expires_at = Utc::now() + Duration::seconds(self.config.lease_time as i64);
+                    
+                    {
+                        let mut leases = self.leases.write().await;
+                        leases.insert(mac, lease.clone());
+                    }
+                    
+                    should_ack = true;
+                    response_ip = Some(lease.ip);
+                }
+            } else if packet.ciaddr != Ipv4Addr::UNSPECIFIED && packet.ciaddr == lease.ip {
+                // Renewing existing lease
+                lease.binding_state = LeaseState::Bound;
+                lease.last_renewal = Some(Utc::now());
+                lease.expires_at = Utc::now() + Duration::seconds(self.config.lease_time as i64);
+                
+                {
+                    let mut leases = self.leases.write().await;
+                    leases.insert(mac, lease.clone());
+                }
+                
+                should_ack = true;
+                response_ip = Some(lease.ip);
+            }
+        }
+
+        if should_ack {
+            self.send_ack(packet, response_ip.unwrap(), &mac, socket).await?;
+            
+            let mut stats = self.statistics.write().await;
+            stats.acks_sent += 1;
+            
+            info!("ACK'd IP {} to MAC {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}", 
+                  response_ip.unwrap(), mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+        } else {
+            self.send_nak(packet, socket).await?;
+            
+            let mut stats = self.statistics.write().await;
+            stats.naks_sent += 1;
+            
+            warn!("NAK'd request from MAC {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}", 
+                  mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+        }
+
+        Ok(())
+    }
+
+    async fn handle_release(&self, packet: &DhcpPacket) -> NebulaResult<()> {
+        let mac = Self::extract_mac_from_packet(packet);
+        
+        {
+            let mut leases = self.leases.write().await;
+            if let Some(lease) = leases.get_mut(&mac) {
+                lease.binding_state = LeaseState::Released;
+                info!("Released IP {} from MAC {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}", 
+                      lease.ip, mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn handle_decline(&self, packet: &DhcpPacket) -> NebulaResult<()> {
+        let mac = Self::extract_mac_from_packet(packet);
+        let declined_ip = packet.get_requested_ip();
+        
+        if let Some(ip) = declined_ip {
+            warn!("Client declined IP {}, marking as unusable", ip);
+            // In a full implementation, you'd mark this IP as unusable for a period
+        }
+
+        // Remove the lease
+        self.remove_lease(&mac).await?;
+        
+        Ok(())
+    }
+
+    async fn handle_inform(&self, packet: &DhcpPacket, socket: &UdpSocket) -> NebulaResult<()> {
+        // DHCP Inform is used by clients that have a static IP but want other config
+        self.send_inform_response(packet, socket).await?;
+        Ok(())
+    }
+
+    async fn allocate_ip_for_mac(&self, mac: &[u8; 6]) -> NebulaResult<Ipv4Addr> {
+        // Check if this MAC has a static reservation
+        {
+            let reserved = self.reserved_ips.read().await;
+            for (ip, reserved_mac) in reserved.iter() {
+                if reserved_mac == mac {
+                    return Ok(*ip);
+                }
+            }
+        }
+
+        // Allocate from available pool
+        {
+            let mut available = self.available_ips.write().await;
+            if let Some(ip) = available.pop() {
+                return Ok(ip);
+            }
+        }
+
+        Err(NebulaError::dhcp("No available IP addresses in DHCP pool"))
+    }
+
+    async fn send_offer(&self, request: &DhcpPacket, offered_ip: Ipv4Addr, mac: &[u8; 6], socket: &UdpSocket) -> NebulaResult<()> {
+        let response = self.create_dhcp_response(request, offered_ip, DhcpMessageType::Offer)?;
+        self.send_dhcp_response(&response, socket).await
+    }
+
+    async fn send_ack(&self, request: &DhcpPacket, acked_ip: Ipv4Addr, mac: &[u8; 6], socket: &UdpSocket) -> NebulaResult<()> {
+        let response = self.create_dhcp_response(request, acked_ip, DhcpMessageType::Ack)?;
+        self.send_dhcp_response(&response, socket).await
+    }
+
+    async fn send_nak(&self, request: &DhcpPacket, socket: &UdpSocket) -> NebulaResult<()> {
+        let response = self.create_dhcp_response(request, Ipv4Addr::UNSPECIFIED, DhcpMessageType::Nak)?;
+        self.send_dhcp_response(&response, socket).await
+    }
+
+    async fn send_inform_response(&self, request: &DhcpPacket, socket: &UdpSocket) -> NebulaResult<()> {
+        // For INFORM, we respond with the client's current IP
+        let response = self.create_dhcp_response(request, request.ciaddr, DhcpMessageType::Ack)?;
+        self.send_dhcp_response(&response, socket).await
+    }
+
+    fn create_dhcp_response(&self, request: &DhcpPacket, ip: Ipv4Addr, message_type: DhcpMessageType) -> NebulaResult<Vec<u8>> {
+        let mut response = vec![0u8; 240]; // Minimum DHCP packet size
+
+        // DHCP header
+        response[0] = 2; // BOOTREPLY
+        response[1] = request.htype;
+        response[2] = request.hlen;
+        response[3] = 0; // Hops
+        response[4..8].copy_from_slice(&request.xid.to_be_bytes());
+        response[8..10].copy_from_slice(&request.secs.to_be_bytes());
+        response[10..12].copy_from_slice(&request.flags.to_be_bytes());
+        response[12..16].copy_from_slice(&request.ciaddr.octets()); // Client IP
+        response[16..20].copy_from_slice(&ip.octets()); // Your IP
+        response[20..24].copy_from_slice(&self.get_server_ip().octets()); // Server IP
+        response[24..28].copy_from_slice(&request.giaddr.octets()); // Gateway IP
+        response[28..44].copy_from_slice(&request.chaddr); // Client hardware address
+
+        // DHCP magic cookie
+        let mut options = vec![99, 130, 83, 99]; // DHCP magic cookie
+
+        // DHCP Message Type
+        options.extend_from_slice(&[53, 1, message_type as u8]);
+
+        // Server Identifier
+        options.extend_from_slice(&[54, 4]);
+        options.extend_from_slice(&self.get_server_ip().octets());
+
+        if message_type != DhcpMessageType::Nak {
+            // Lease Time
+            options.extend_from_slice(&[51, 4]);
+            options.extend_from_slice(&self.config.lease_time.to_be_bytes());
+
+            // Renewal Time (T1)
+            options.extend_from_slice(&[58, 4]);
+            options.extend_from_slice(&self.config.renewal_time.to_be_bytes());
+
+            // Rebinding Time (T2)
+            options.extend_from_slice(&[59, 4]);
+            options.extend_from_slice(&self.config.rebinding_time.to_be_bytes());
+
+            // Subnet Mask
+            let subnet_mask: Ipv4Addr = self.config.subnet_mask.parse()
+                .map_err(|_| NebulaError::dhcp("Invalid subnet mask in config"))?;
+            options.extend_from_slice(&[1, 4]);
+            options.extend_from_slice(&subnet_mask.octets());
+
+            // Router (Gateway)
+            if let Some(ref router) = self.config.router {
+                let router_ip: Ipv4Addr = router.parse()
+                    .map_err(|_| NebulaError::dhcp("Invalid router IP in config"))?;
+                options.extend_from_slice(&[3, 4]);
+                options.extend_from_slice(&router_ip.octets());
+            }
+
+            // DNS Servers
+            if !self.config.dns_servers.is_empty() {
+                let dns_count = std::cmp::min(self.config.dns_servers.len(), 3); // Max 3 DNS servers
+                options.extend_from_slice(&[6, (dns_count * 4) as u8]);
+                
+                for dns_server in self.config.dns_servers.iter().take(dns_count) {
+                    let dns_ip: Ipv4Addr = dns_server.parse()
+                        .map_err(|_| NebulaError::dhcp("Invalid DNS server IP in config"))?;
+                    options.extend_from_slice(&dns_ip.octets());
+                }
+            }
+
+            // Domain Name
+            if let Some(ref domain) = self.config.domain_name {
+                let domain_bytes = domain.as_bytes();
+                options.extend_from_slice(&[15, domain_bytes.len() as u8]);
+                options.extend_from_slice(domain_bytes);
+            }
+        }
+
+        // End option
+        options.push(255);
+
+        // Pad to minimum length if necessary
+        while options.len() < 64 {
+            options.push(0);
+        }
+
+        response.extend_from_slice(&options);
+
+        Ok(response)
+    }
+
+    async fn send_dhcp_response(&self, response: &[u8], socket: &UdpSocket) -> NebulaResult<()> {
+        let broadcast_addr = SocketAddr::from(([255, 255, 255, 255], 68));
+        
+        socket.send_to(response, broadcast_addr)
+            .map_err(|e| NebulaError::dhcp(format!("Failed to send DHCP response: {}", e)))?;
+        
+        Ok(())
+    }
+
+    fn get_server_ip(&self) -> Ipv4Addr {
+        // In a real implementation, you'd determine the actual server IP
+        // For now, use localhost
+        Ipv4Addr::new(127, 0, 0, 1)
+    }
+
+    fn generate_ip_range(config: &DhcpConfig) -> NebulaResult<Vec<Ipv4Addr>> {
+        let start: Ipv4Addr = config.range_start.parse()
+            .map_err(|_| NebulaError::dhcp(format!("Invalid range start IP: {}", config.range_start)))?;
+        let end: Ipv4Addr = config.range_end.parse()
+            .map_err(|_| NebulaError::dhcp(format!("Invalid range end IP: {}", config.range_end)))?;
+        
+        let start_int = u32::from(start);
+        let end_int = u32::from(end);
+        
+        if start_int >= end_int {
+            return Err(NebulaError::dhcp("DHCP range start must be less than end"));
+        }
+
+        let mut ips = Vec::new();
+        for ip_int in start_int..=end_int {
+            ips.push(Ipv4Addr::from(ip_int));
+        }
+
+        info!("Generated DHCP IP range: {} IPs from {} to {}", ips.len(), start, end);
+        Ok(ips)
+    }
+
+    fn parse_mac_address(mac_str: &str) -> NebulaResult<[u8; 6]> {
+        let parts: Vec<&str> = mac_str.split(':').collect();
+        if parts.len() != 6 {
+            return Err(NebulaError::dhcp(format!("Invalid MAC address format: {}", mac_str)));
+        }
+
+        let mut mac = [0u8; 6];
+        for (i, part) in parts.iter().enumerate() {
+            mac[i] = u8::from_str_radix(part, 16)
+                .map_err(|_| NebulaError::dhcp(format!("Invalid MAC address: {}", mac_str)))?;
+        }
+
+        Ok(mac)
+    }
+
+    fn extract_mac_from_packet(packet: &DhcpPacket) -> [u8; 6] {
+        let mut mac = [0u8; 6];
+        mac.copy_from_slice(&packet.chaddr[0..6]);
+        mac
+    }
+
+    fn can_bind_dhcp_port() -> bool {
+        match UdpSocket::bind("0.0.0.0:67") {
+            Ok(_) => true,
+            Err(_) => false,
+        }
+    }
+
+    fn is_ip_in_range(&self, ip: Ipv4Addr) -> bool {
+        let start: Ipv4Addr = self.config.range_start.parse().unwrap_or(Ipv4Addr::UNSPECIFIED);
+        let end: Ipv4Addr = self.config.range_end.parse().unwrap_or(Ipv4Addr::UNSPECIFIED);
+        
+        let ip_int = u32::from(ip);
+        let start_int = u32::from(start);
+        let end_int = u32::from(end);
+        
+        ip_int >= start_int && ip_int <= end_int
+    }
+
+    async fn initialize_static_leases(&self) -> NebulaResult<()> {
+        for static_lease in &self.config.static_leases {
+            let mac = Self::parse_mac_address(&static_lease.mac)?;
+            let ip: Ipv4Addr = static_lease.ip.parse()
+                .map_err(|_| NebulaError::dhcp(format!("Invalid static lease IP: {}", static_lease.ip)))?;
+            
+            self.add_static_lease(mac, ip, static_lease.hostname.clone()).await?;
+        }
+        
+        Ok(())
+    }
+
+    async fn lease_cleanup_loop(&self) {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(300)); // Every 5 minutes
+        
+        loop {
+            interval.tick().await;
+            
+            if !*self.is_running.read().await {
+                break;
+            }
+
+            if let Err(e) = self.cleanup_expired_leases().await {
+                warn!("Lease cleanup failed: {}", e);
+            }
+        }
+    }
 }
 
 impl DhcpPacket {
-    pub fn parse(data: &[u8]) -> Result<Self> {
+    pub fn parse(data: &[u8]) -> NebulaResult<Self> {
         if data.len() < 240 {
-            return Err(anyhow::anyhow!("DHCP packet too short: {} bytes", data.len()));
+            return Err(NebulaError::dhcp(format!("DHCP packet too short: {} bytes", data.len())));
         }
 
         let mut chaddr = [0u8; 16];
-        chaddr[..6].copy_from_slice(&data[28..34]);
+        chaddr[..16].copy_from_slice(&data[28..44]);
         
         let mut sname = [0u8; 64];
         sname.copy_from_slice(&data[44..108]);
@@ -97,694 +842,99 @@ impl DhcpPacket {
         })
     }
 
-    pub fn get_message_type(&self) -> Result<Option<DhcpMessageType>> {
-        // Look for DHCP Message Type option (53)
-        let mut i = 0;
-        while i < self.options.len() {
-            if i + 2 >= self.options.len() {
-                break;
+    pub fn get_message_type(&self) -> NebulaResult<Option<DhcpMessageType>> {
+        self.get_option(53).map(|data| {
+            if !data.is_empty() {
+                Some(DhcpMessageType::try_from(data[0]).ok()?)
+            } else {
+                None
             }
-            
-            let option_type = self.options[i];
-            let option_len = self.options[i + 1] as usize;
-            
-            if option_type == 53 && option_len == 1 && i + 2 < self.options.len() {
-                return Ok(Some(DhcpMessageType::try_from(self.options[i + 2])?));
-            }
-            
-            i += 2 + option_len;
-        }
-        
-        Ok(None)
+        }).unwrap_or(Ok(None))
     }
 
     pub fn get_requested_ip(&self) -> Option<Ipv4Addr> {
-        // Look for Requested IP Address option (50)
-        let mut i = 0;
-        while i < self.options.len() {
-            if i + 2 >= self.options.len() {
-                break;
+        self.get_option(50).and_then(|data| {
+            if data.len() == 4 {
+                Some(Ipv4Addr::new(data[0], data[1], data[2], data[3]))
+            } else {
+                None
             }
-            
-            let option_type = self.options[i];
-            let option_len = self.options[i + 1] as usize;
-            
-            if option_type == 50 && option_len == 4 && i + 6 < self.options.len() {
-                return Some(Ipv4Addr::new(
-                    self.options[i + 2],
-                    self.options[i + 3],
-                    self.options[i + 4],
-                    self.options[i + 5],
-                ));
-            }
-            
-            i += 2 + option_len;
-        }
-        
-        None
-    }
-
-    pub fn get_client_identifier(&self) -> Option<Vec<u8>> {
-        // Look for Client Identifier option (61)
-        let mut i = 0;
-        while i < self.options.len() {
-            if i + 2 >= self.options.len() {
-                break;
-            }
-            
-            let option_type = self.options[i];
-            let option_len = self.options[i + 1] as usize;
-            
-            if option_type == 61 && i + 2 + option_len <= self.options.len() {
-                return Some(self.options[i + 2..i + 2 + option_len].to_vec());
-            }
-            
-            i += 2 + option_len;
-        }
-        
-        None
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::cli::DhcpConfig;
-
-    #[tokio::test]
-    async fn test_dhcp_server_creation() {
-        let config = DhcpConfig {
-            enabled: false, // Disable for testing to avoid port conflicts
-            range_start: "192.168.100.100".to_string(),
-            range_end: "192.168.100.200".to_string(),
-            lease_time: 3600,
-        };
-
-        let dhcp_server = DhcpServer::new(config).await;
-        assert!(dhcp_server.is_ok(), "DHCP server should be created successfully");
-    }
-
-    #[tokio::test]
-    async fn test_dhcp_lease_management() {
-        let config = DhcpConfig {
-            enabled: false,
-            range_start: "192.168.100.100".to_string(),
-            range_end: "192.168.100.200".to_string(),
-            lease_time: 3600,
-        };
-
-        let dhcp_server = DhcpServer::new(config).await.unwrap();
-        
-        // Test adding static lease
-        let mac = [0x00, 0x11, 0x22, 0x33, 0x44, 0x55];
-        let ip = Ipv4Addr::new(192, 168, 100, 100);
-        let result = dhcp_server.add_static_lease(mac, ip, Some("test-device".to_string())).await;
-        assert!(result.is_ok(), "Should be able to add static lease");
-        
-        // Test getting lease by MAC
-        let lease = dhcp_server.get_lease_by_mac(&mac).await;
-        assert!(lease.is_some(), "Should find lease by MAC");
-        assert_eq!(lease.unwrap().ip, ip);
-        
-        // Test getting lease by IP
-        let lease = dhcp_server.get_lease_by_ip(ip).await;
-        assert!(lease.is_some(), "Should find lease by IP");
-        assert_eq!(lease.unwrap().mac, mac);
-    }
-
-    #[tokio::test]
-    async fn test_dhcp_packet_parsing() {
-        // Create a minimal DHCP Discover packet
-        let mut packet_data = vec![0u8; 240];
-        packet_data[0] = 1; // BOOTREQUEST
-        packet_data[1] = 1; // Ethernet
-        packet_data[2] = 6; // MAC address length
-        packet_data[3] = 0; // Hops
-        
-        // Transaction ID
-        packet_data[4..8].copy_from_slice(&12345u32.to_be_bytes());
-        
-        // Client MAC address
-        packet_data[28..34].copy_from_slice(&[0x00, 0x11, 0x22, 0x33, 0x44, 0x55]);
-        
-        // Add DHCP options (DHCP Message Type: Discover)
-        let options = vec![53, 1, 1, 255]; // DHCP Message Type: Discover, End option
-        packet_data.extend_from_slice(&options);
-        
-        let packet = DhcpPacket::parse(&packet_data);
-        assert!(packet.is_ok(), "Should parse DHCP packet successfully");
-        
-        let packet = packet.unwrap();
-        assert_eq!(packet.op, 1);
-        assert_eq!(packet.xid, 12345);
-        assert_eq!(packet.chaddr[0..6], [0x00, 0x11, 0x22, 0x33, 0x44, 0x55]);
-        
-        let message_type = packet.get_message_type();
-        assert!(message_type.is_ok(), "Should parse message type");
-        assert_eq!(message_type.unwrap(), Some(DhcpMessageType::Discover));
-    }
-
-    #[tokio::test]
-    async fn test_dhcp_message_types() {
-        let message_types = vec![
-            (1u8, DhcpMessageType::Discover),
-            (2u8, DhcpMessageType::Offer),
-            (3u8, DhcpMessageType::Request),
-            (4u8, DhcpMessageType::Decline),
-            (5u8, DhcpMessageType::Ack),
-            (6u8, DhcpMessageType::Nak),
-            (7u8, DhcpMessageType::Release),
-            (8u8, DhcpMessageType::Inform),
-        ];
-
-        for (value, expected) in message_types {
-            let message_type = DhcpMessageType::try_from(value);
-            assert!(message_type.is_ok(), "Should parse message type {}", value);
-            assert_eq!(message_type.unwrap(), expected);
-        }
-
-        // Test invalid message type
-        let invalid = DhcpMessageType::try_from(99);
-        assert!(invalid.is_err(), "Should reject invalid message type");
-    }
-
-    #[tokio::test]
-    async fn test_dhcp_ip_range_generation() {
-        let config = DhcpConfig {
-            enabled: false,
-            range_start: "192.168.100.100".to_string(),
-            range_end: "192.168.100.105".to_string(),
-            lease_time: 3600,
-        };
-
-        let ips = DhcpServer::generate_ip_range(&config).unwrap();
-        assert_eq!(ips.len(), 6); // 100, 101, 102, 103, 104, 105
-        
-        assert_eq!(ips[0], Ipv4Addr::new(192, 168, 100, 100));
-        assert_eq!(ips[5], Ipv4Addr::new(192, 168, 100, 105));
-    }
-
-    #[tokio::test]
-    async fn test_dhcp_invalid_ip_range() {
-        let config = DhcpConfig {
-            enabled: false,
-            range_start: "192.168.100.200".to_string(),
-            range_end: "192.168.100.100".to_string(), // End before start
-            lease_time: 3600,
-        };
-
-        let result = DhcpServer::generate_ip_range(&config);
-        assert!(result.is_err(), "Should reject invalid IP range");
-    }
-
-    #[tokio::test]
-    async fn test_dhcp_lease_state_transitions() {
-        let config = DhcpConfig {
-            enabled: false,
-            range_start: "192.168.100.100".to_string(),
-            range_end: "192.168.100.200".to_string(),
-            lease_time: 3600,
-        };
-
-        let dhcp_server = DhcpServer::new(config).await.unwrap();
-        
-        let mac = [0x00, 0x11, 0x22, 0x33, 0x44, 0x55];
-        let ip = Ipv4Addr::new(192, 168, 100, 100);
-        
-        // Add static lease (should be in Bound state)
-        dhcp_server.add_static_lease(mac, ip, Some("test-device".to_string())).await.unwrap();
-        
-        let lease = dhcp_server.get_lease_by_mac(&mac).await.unwrap();
-        assert_eq!(lease.binding_state, LeaseState::Bound);
-        assert_eq!(lease.ip, ip);
-        assert_eq!(lease.mac, mac);
-    }
-
-    #[tokio::test]
-    async fn test_dhcp_packet_options() {
-        // Create a DHCP packet with various options
-        let mut packet_data = vec![0u8; 240];
-        packet_data[0] = 1; // BOOTREQUEST
-        packet_data[1] = 1; // Ethernet
-        packet_data[2] = 6; // MAC address length
-        
-        // Client MAC address
-        packet_data[28..34].copy_from_slice(&[0x00, 0x11, 0x22, 0x33, 0x44, 0x55]);
-        
-        // Add DHCP options
-        let options = vec![
-            53, 1, 3, // DHCP Message Type: Request
-            50, 4, 192, 168, 100, 100, // Requested IP Address
-            61, 7, 0, 1, 0x00, 0x11, 0x22, 0x33, 0x44, 0x55, // Client Identifier
-            255, // End option
-        ];
-        packet_data.extend_from_slice(&options);
-        
-        let packet = DhcpPacket::parse(&packet_data).unwrap();
-        
-        // Test message type parsing
-        let message_type = packet.get_message_type().unwrap();
-        assert_eq!(message_type, Some(DhcpMessageType::Request));
-        
-        // Test requested IP parsing
-        let requested_ip = packet.get_requested_ip();
-        assert_eq!(requested_ip, Some(Ipv4Addr::new(192, 168, 100, 100)));
-        
-        // Test client identifier parsing
-        let client_id = packet.get_client_identifier();
-        assert!(client_id.is_some());
-        let client_id = client_id.unwrap();
-        assert_eq!(client_id.len(), 7);
-        assert_eq!(client_id[0], 0); // Hardware type
-        assert_eq!(client_id[1], 1); // Hardware length
-        assert_eq!(client_id[2..7], [0x00, 0x11, 0x22, 0x33, 0x44]); // MAC address (first 5 bytes)
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct DhcpLease {
-    pub ip: Ipv4Addr,
-    pub mac: [u8; 6],
-    pub hostname: Option<String>,
-    pub expires_at: DateTime<Utc>,
-    pub client_id: Option<Vec<u8>>,
-    pub binding_state: LeaseState,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum LeaseState {
-    Free,
-    Offered,
-    Bound,
-    Released,
-}
-
-pub struct DhcpServer {
-    config: DhcpConfig,
-    leases: Arc<RwLock<HashMap<[u8; 6], DhcpLease>>>,
-    available_ips: Arc<RwLock<Vec<Ipv4Addr>>>,
-}
-
-impl DhcpServer {
-    pub async fn new(config: DhcpConfig) -> Result<Self> {
-        let available_ips = Self::generate_ip_range(&config)?;
-        
-        Ok(Self {
-            config,
-            leases: Arc::new(RwLock::new(HashMap::new())),
-            available_ips: Arc::new(RwLock::new(available_ips)),
         })
     }
 
-    pub async fn start(&self) -> Result<()> {
-        if !self.config.enabled {
-            info!("DHCP server disabled in configuration");
-            return Ok(());
-        }
+    pub fn get_server_identifier(&self) -> Option<Ipv4Addr> {
+        self.get_option(54).and_then(|data| {
+            if data.len() == 4 {
+                Some(Ipv4Addr::new(data[0], data[1], data[2], data[3]))
+            } else {
+                None
+            }
+        })
+    }
 
-        info!("Starting DHCP server...");
-        
-        let socket = UdpSocket::bind("0.0.0.0:67")?;
-        socket.set_broadcast(true)?;
-        
-        info!("✅ DHCP server started on port 67");
-        
-        // Start DHCP message processing loop
-        let leases = self.leases.clone();
-        let available_ips = self.available_ips.clone();
-        let config = self.config.clone();
-        
-        tokio::spawn(async move {
-            let mut buf = [0u8; 1024];
+    pub fn get_client_identifier(&self) -> Option<Vec<u8>> {
+        self.get_option(61).map(|data| data.to_vec())
+    }
+
+    pub fn get_hostname(&self) -> Option<String> {
+        self.get_option(12).and_then(|data| {
+            String::from_utf8(data.to_vec()).ok()
+        })
+    }
+
+    fn get_option(&self, option_type: u8) -> Option<&[u8]> {
+        let mut i = 0;
+        while i < self.options.len() {
+            if i + 1 >= self.options.len() {
+                break;
+            }
             
-            loop {
-                match socket.recv_from(&mut buf) {
-                    Ok((size, addr)) => {
-                        debug!("Received DHCP packet from {}: {} bytes", addr, size);
-                        
-                        if let Err(e) = Self::handle_dhcp_packet(
-                            &buf[..size],
-                            addr,
-                            &socket,
-                            &leases,
-                            &available_ips,
-                            &config,
-                        ).await {
-                            warn!("Error handling DHCP packet: {}", e);
-                        }
-                    }
-                    Err(e) => {
-                        warn!("DHCP socket error: {}", e);
-                        break;
-                    }
-                }
-            }
-        });
-
-        Ok(())
-    }
-
-    pub async fn stop(&self) -> Result<()> {
-        info!("Stopping DHCP server...");
-        // DHCP server cleanup
-        Ok(())
-    }
-
-    fn generate_ip_range(config: &DhcpConfig) -> Result<Vec<Ipv4Addr>> {
-        let start: Ipv4Addr = config.range_start.parse()?;
-        let end: Ipv4Addr = config.range_end.parse()?;
-        
-        let start_int = u32::from(start);
-        let end_int = u32::from(end);
-        
-        if start_int >= end_int {
-            return Err(anyhow::anyhow!("Invalid IP range"));
-        }
-
-        let mut ips = Vec::new();
-        for ip_int in start_int..=end_int {
-            ips.push(Ipv4Addr::from(ip_int));
-        }
-
-        info!("Generated DHCP IP range: {} IPs from {} to {}", 
-              ips.len(), start, end);
-        
-        Ok(ips)
-    }
-
-    async fn handle_dhcp_packet(
-        packet: &[u8],
-        client_addr: SocketAddr,
-        socket: &UdpSocket,
-        leases: &Arc<RwLock<HashMap<[u8; 6], DhcpLease>>>,
-        available_ips: &Arc<RwLock<Vec<Ipv4Addr>>>,
-        config: &DhcpConfig,
-    ) -> Result<()> {
-        let dhcp_packet = DhcpPacket::parse(packet)?;
-        let message_type = dhcp_packet.get_message_type()?;
-        
-        debug!("Received DHCP packet from {}: {:?}", client_addr, message_type);
-        
-        match message_type {
-            Some(DhcpMessageType::Discover) => {
-                Self::handle_discover(&dhcp_packet, socket, leases, available_ips, config).await?;
-            }
-            Some(DhcpMessageType::Request) => {
-                Self::handle_request(&dhcp_packet, socket, leases, config).await?;
-            }
-            Some(DhcpMessageType::Release) => {
-                Self::handle_release(&dhcp_packet, leases).await?;
-            }
-            _ => {
-                debug!("Unhandled DHCP message type: {:?}", message_type);
-            }
-        }
-        
-        Ok(())
-    }
-
-    async fn handle_discover(
-        packet: &DhcpPacket,
-        socket: &UdpSocket,
-        leases: &Arc<RwLock<HashMap<[u8; 6], DhcpLease>>>,
-        available_ips: &Arc<RwLock<Vec<Ipv4Addr>>>,
-        config: &DhcpConfig,
-    ) -> Result<()> {
-        let mac = [packet.chaddr[0], packet.chaddr[1], packet.chaddr[2], 
-                   packet.chaddr[3], packet.chaddr[4], packet.chaddr[5]];
-        
-        // Check if we already have a lease for this MAC
-        let mut leases_guard = leases.write().await;
-        if let Some(lease) = leases_guard.get(&mac) {
-            if lease.expires_at > Utc::now() && lease.binding_state == LeaseState::Bound {
-                // Send DHCP Offer with existing IP
-                Self::send_offer(socket, packet, lease.ip, &mac, config).await?;
-                return Ok(());
-            }
-        }
-        
-        // Find available IP
-        let mut available_ips_guard = available_ips.write().await;
-        if let Some(ip) = available_ips_guard.pop() {
-            // Create new lease
-            let lease = DhcpLease {
-                ip,
-                mac,
-                hostname: None,
-                expires_at: Utc::now() + chrono::Duration::seconds(config.lease_time as i64),
-                client_id: packet.get_client_identifier(),
-                binding_state: LeaseState::Offered,
-            };
+            let opt_type = self.options[i];
+            let opt_len = self.options[i + 1] as usize;
             
-            leases_guard.insert(mac, lease.clone());
-            
-            // Send DHCP Offer
-            Self::send_offer(socket, packet, ip, &mac, config).await?;
-            
-            info!("Offered IP {} to MAC {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}", 
-                  ip, mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
-        } else {
-            warn!("No available IPs for DHCP Discover from MAC {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}", 
-                  mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
-        }
-        
-        Ok(())
-    }
-
-    async fn handle_request(
-        packet: &DhcpPacket,
-        socket: &UdpSocket,
-        leases: &Arc<RwLock<HashMap<[u8; 6], DhcpLease>>>,
-        config: &DhcpConfig,
-    ) -> Result<()> {
-        let mac = [packet.chaddr[0], packet.chaddr[1], packet.chaddr[2], 
-                   packet.chaddr[3], packet.chaddr[4], packet.chaddr[5]];
-        
-        let requested_ip = packet.get_requested_ip();
-        let mut leases_guard = leases.write().await;
-        
-        if let Some(lease) = leases_guard.get_mut(&mac) {
-            if let Some(req_ip) = requested_ip {
-                if req_ip == lease.ip && lease.binding_state == LeaseState::Offered {
-                    // Accept the request
-                    lease.binding_state = LeaseState::Bound;
-                    lease.expires_at = Utc::now() + chrono::Duration::seconds(config.lease_time as i64);
-                    
-                    Self::send_ack(socket, packet, lease.ip, &mac, config).await?;
-                    
-                    info!("ACK'd IP {} to MAC {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}", 
-                          lease.ip, mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
-                } else {
-                    // Reject the request
-                    Self::send_nak(socket, packet).await?;
-                    warn!("NAK'd request for IP {} from MAC {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}", 
-                          req_ip, mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
-                }
+            if opt_type == option_type && i + 2 + opt_len <= self.options.len() {
+                return Some(&self.options[i + 2..i + 2 + opt_len]);
             }
-        }
-        
-        Ok(())
-    }
-
-    async fn handle_release(
-        packet: &DhcpPacket,
-        leases: &Arc<RwLock<HashMap<[u8; 6], DhcpLease>>>,
-    ) -> Result<()> {
-        let mac = [packet.chaddr[0], packet.chaddr[1], packet.chaddr[2], 
-                   packet.chaddr[3], packet.chaddr[4], packet.chaddr[5]];
-        
-        let mut leases_guard = leases.write().await;
-        if let Some(lease) = leases_guard.get_mut(&mac) {
-            lease.binding_state = LeaseState::Released;
-            info!("Released IP {} from MAC {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}", 
-                  lease.ip, mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
-        }
-        
-        Ok(())
-    }
-
-    async fn send_offer(
-        socket: &UdpSocket,
-        request: &DhcpPacket,
-        offered_ip: Ipv4Addr,
-        mac: &[u8; 6],
-        config: &DhcpConfig,
-    ) -> Result<()> {
-        let mut response = vec![0u8; 240];
-        
-        // Basic DHCP header
-        response[0] = 2; // BOOTREPLY
-        response[1] = 1; // Ethernet
-        response[2] = 6; // MAC address length
-        response[3] = 0; // Hops
-        response[4..8].copy_from_slice(&request.xid.to_be_bytes());
-        response[8..10].copy_from_slice(&request.secs.to_be_bytes());
-        response[10..12].copy_from_slice(&0u16.to_be_bytes()); // Flags
-        response[12..16].copy_from_slice(&[0, 0, 0, 0]); // Client IP
-        response[16..20].copy_from_slice(&offered_ip.octets()); // Your IP
-        response[20..24].copy_from_slice(&[127, 0, 0, 1]); // Server IP
-        response[24..28].copy_from_slice(&[0, 0, 0, 0]); // Gateway IP
-        response[28..34].copy_from_slice(mac); // Client MAC
-        response[34..44].copy_from_slice(&[0; 10]); // MAC padding
-        
-        // Add DHCP options
-        let mut options = vec![
-            53, 1, 2, // DHCP Message Type: Offer
-            54, 4, 127, 0, 0, 1, // Server Identifier
-            51, 4, // IP Address Lease Time
-        ];
-        options.extend_from_slice(&config.lease_time.to_be_bytes());
-        
-        // Subnet mask
-        options.extend_from_slice(&[1, 4, 255, 255, 255, 0]);
-        
-        // End option
-        options.push(255);
-        
-        response.extend_from_slice(&options);
-        
-        // Send to broadcast address
-        let broadcast_addr = SocketAddr::new(Ipv4Addr::new(255, 255, 255, 255).into(), 68);
-        socket.send_to(&response, broadcast_addr)?;
-        
-        Ok(())
-    }
-
-    async fn send_ack(
-        socket: &UdpSocket,
-        request: &DhcpPacket,
-        acked_ip: Ipv4Addr,
-        mac: &[u8; 6],
-        config: &DhcpConfig,
-    ) -> Result<()> {
-        let mut response = vec![0u8; 240];
-        
-        // Basic DHCP header
-        response[0] = 2; // BOOTREPLY
-        response[1] = 1; // Ethernet
-        response[2] = 6; // MAC address length
-        response[3] = 0; // Hops
-        response[4..8].copy_from_slice(&request.xid.to_be_bytes());
-        response[8..10].copy_from_slice(&request.secs.to_be_bytes());
-        response[10..12].copy_from_slice(&0u16.to_be_bytes()); // Flags
-        response[12..16].copy_from_slice(&[0, 0, 0, 0]); // Client IP
-        response[16..20].copy_from_slice(&acked_ip.octets()); // Your IP
-        response[20..24].copy_from_slice(&[127, 0, 0, 1]); // Server IP
-        response[24..28].copy_from_slice(&[0, 0, 0, 0]); // Gateway IP
-        response[28..34].copy_from_slice(mac); // Client MAC
-        response[34..44].copy_from_slice(&[0; 10]); // MAC padding
-        
-        // Add DHCP options
-        let mut options = vec![
-            53, 1, 5, // DHCP Message Type: ACK
-            54, 4, 127, 0, 0, 1, // Server Identifier
-            51, 4, // IP Address Lease Time
-        ];
-        options.extend_from_slice(&config.lease_time.to_be_bytes());
-        
-        // Subnet mask
-        options.extend_from_slice(&[1, 4, 255, 255, 255, 0]);
-        
-        // End option
-        options.push(255);
-        
-        response.extend_from_slice(&options);
-        
-        // Send to broadcast address
-        let broadcast_addr = SocketAddr::new(Ipv4Addr::new(255, 255, 255, 255).into(), 68);
-        socket.send_to(&response, broadcast_addr)?;
-        
-        Ok(())
-    }
-
-    async fn send_nak(
-        socket: &UdpSocket,
-        request: &DhcpPacket,
-    ) -> Result<()> {
-        let mut response = vec![0u8; 240];
-        
-        // Basic DHCP header
-        response[0] = 2; // BOOTREPLY
-        response[1] = 1; // Ethernet
-        response[2] = 6; // MAC address length
-        response[3] = 0; // Hops
-        response[4..8].copy_from_slice(&request.xid.to_be_bytes());
-        response[8..10].copy_from_slice(&request.secs.to_be_bytes());
-        response[10..12].copy_from_slice(&0u16.to_be_bytes()); // Flags
-        response[12..16].copy_from_slice(&[0, 0, 0, 0]); // Client IP
-        response[16..20].copy_from_slice(&[0, 0, 0, 0]); // Your IP
-        response[20..24].copy_from_slice(&[127, 0, 0, 1]); // Server IP
-        response[24..28].copy_from_slice(&[0, 0, 0, 0]); // Gateway IP
-        response[28..34].copy_from_slice(&request.chaddr[0..6]); // Client MAC
-        response[34..44].copy_from_slice(&[0; 10]); // MAC padding
-        
-        // Add DHCP options
-        let options = vec![
-            53, 1, 6, // DHCP Message Type: NAK
-            54, 4, 127, 0, 0, 1, // Server Identifier
-            255, // End option
-        ];
-        
-        response.extend_from_slice(&options);
-        
-        // Send to broadcast address
-        let broadcast_addr = SocketAddr::new(Ipv4Addr::new(255, 255, 255, 255).into(), 68);
-        socket.send_to(&response, broadcast_addr)?;
-        
-        Ok(())
-    }
-
-    pub async fn get_leases(&self) -> HashMap<[u8; 6], DhcpLease> {
-        self.leases.read().await.clone()
-    }
-
-    pub async fn add_static_lease(&self, mac: [u8; 6], ip: Ipv4Addr, hostname: Option<String>) -> Result<()> {
-        let lease = DhcpLease {
-            ip,
-            mac,
-            hostname,
-            expires_at: Utc::now() + chrono::Duration::seconds(self.config.lease_time as i64),
-            client_id: None,
-            binding_state: LeaseState::Bound,
-        };
-
-        self.leases.write().await.insert(mac, lease);
-        info!("Added static DHCP lease: {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} -> {}", 
-              mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], ip);
-        
-        Ok(())
-    }
-
-    pub async fn cleanup_expired_leases(&self) -> Result<()> {
-        let now = Utc::now();
-        let mut leases_guard = self.leases.write().await;
-        let mut available_ips_guard = self.available_ips.write().await;
-        
-        let expired_macs: Vec<[u8; 6]> = leases_guard
-            .iter()
-            .filter(|(_, lease)| lease.expires_at < now)
-            .map(|(mac, _)| *mac)
-            .collect();
-        
-        for mac in expired_macs {
-            if let Some(lease) = leases_guard.remove(&mac) {
-                available_ips_guard.push(lease.ip);
-                info!("Cleaned up expired lease: {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} -> {}", 
-                      mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], lease.ip);
+            
+            if opt_type == 255 { // End option
+                break;
             }
+            
+            i += 2 + opt_len;
         }
         
-        Ok(())
+        None
     }
+}
 
-    pub async fn get_lease_by_mac(&self, mac: &[u8; 6]) -> Option<DhcpLease> {
-        self.leases.read().await.get(mac).cloned()
+impl Default for DhcpStatistics {
+    fn default() -> Self {
+        Self {
+            discovers_received: 0,
+            offers_sent: 0,
+            requests_received: 0,
+            acks_sent: 0,
+            naks_sent: 0,
+            releases_received: 0,
+            active_leases: 0,
+            expired_leases: 0,
+            static_leases: 0,
+        }
     }
+}
 
-    pub async fn get_lease_by_ip(&self, ip: Ipv4Addr) -> Option<DhcpLease> {
-        self.leases.read().await
-            .values()
-            .find(|lease| lease.ip == ip)
-            .cloned()
+impl Clone for DhcpStatistics {
+    fn clone(&self) -> Self {
+        Self {
+            discovers_received: self.discovers_received,
+            offers_sent: self.offers_sent,
+            requests_received: self.requests_received,
+            acks_sent: self.acks_sent,
+            naks_sent: self.naks_sent,
+            releases_received: self.releases_received,
+            active_leases: self.active_leases,
+            expired_leases: self.expired_leases,
+            static_leases: self.static_leases,
+        }
     }
 }

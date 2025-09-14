@@ -1,0 +1,88 @@
+name: ❓ Question
+description: Ask a question about Nebula
+title: "[Question]: "
+labels: ["question", "needs-triage"]
+assignees: []
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Have a question about Nebula? We're here to help! Please provide as much detail as possible.
+
+  - type: textarea
+    id: question
+    attributes:
+      label: Question
+      description: What would you like to know?
+      placeholder: Ask your question here...
+    validations:
+      required: true
+
+  - type: dropdown
+    id: question-category
+    attributes:
+      label: Question Category
+      description: What type of question is this?
+      options:
+        - Installation & Setup
+        - Configuration
+        - Usage & Commands
+        - Troubleshooting
+        - Performance
+        - Security
+        - Integration
+        - Development
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: nebula-version
+    attributes:
+      label: Nebula Version
+      description: What version of Nebula are you using?
+      placeholder: e.g., v1.0.0 or commit hash
+
+  - type: dropdown
+    id: operating-system
+    attributes:
+      label: Operating System
+      description: What operating system are you using?
+      options:
+        - Ubuntu 20.04
+        - Ubuntu 22.04
+        - macOS 12
+        - macOS 13
+        - macOS 14
+        - Windows 10
+        - Windows 11
+        - Other Linux
+        - Other
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: Provide any relevant context about your question.
+      placeholder: What are you trying to accomplish? What have you tried so far?
+
+  - type: textarea
+    id: additional-info
+    attributes:
+      label: Additional Information
+      description: Any other information that might be helpful.
+      placeholder: Screenshots, logs, configuration snippets, etc.
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Checklist
+      description: Please confirm the following
+      options:
+        - label: I have searched existing issues and documentation
+          required: true
+        - label: I have provided clear context about my question
+          required: true
+        - label: I am willing to provide additional information if needed
+          required: false
