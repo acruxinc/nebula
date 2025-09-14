@@ -1,206 +1,506 @@
-# 🌌 Nebula - Cross-Platform Universal Development & Production Server
+# 🌌 Nebula
 
-A powerful cross-platform universal development and production server that supports **any programming language and framework**. Nebula automatically detects your project type and provides built-in DNS, DHCP, TLS certificate management, and deployment scheduling with optimal configuration for your specific tech stack.
+**Universal Development & Production Server for Any Programming Language and Framework**
+
+[![CI/CD](https://github.com/acruxinc/nebula/actions/workflows/ci.yml/badge.svg)](https://github.com/acruxinc/nebula/actions/workflows/ci.yml)
+[![Security](https://github.com/acruxinc/nebula/actions/workflows/security.yml/badge.svg)](https://github.com/acruxinc/nebula/actions/workflows/security.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Rust](https://img.shields.io/badge/rust-1.70%2B-orange.svg)](https://www.rust-lang.org)
+
+Nebula is a cross-platform universal development and production server that works with **any programming language and framework**. It provides built-in DNS, DHCP, and TLS management, making local development seamless and production deployment effortless.
+
+## ✨ Features
+
+### 🚀 **Universal Language Support**
+- **Auto-detection** of 15+ programming languages and frameworks
+- **Smart configuration** generation based on project type
+- **Framework-specific templates** with optimized settings
+- **No external dependencies** - works out of the box
+
+### 🌐 **Built-in Network Services**
+- **Custom DNS server** with `.nebula.com` and `.dev` domain support
+- **DHCP server** with full protocol implementation and lease management
+- **Automatic TLS certificate generation** with wildcard support
+- **Cross-platform DNS configuration** (macOS, Linux, Windows)
+
+### 🎯 **Development Mode**
+- **Hot reload** with intelligent file watching
+- **Automatic browser opening** (optional)
+- **Process management** with graceful shutdown
+- **Environment variable injection**
+- **Port conflict resolution**
+
+### 🏭 **Production Mode**
+- **Built-in scheduler** for deployment management
+- **Custom TLD support** for production domains
+- **Concurrent deployment handling**
+- **Health monitoring** and auto-restart
+- **Resource management** and cleanup
+
+### 🔧 **Advanced Features**
+- **Cross-platform compatibility** (macOS, Linux, Windows)
+- **Zero-configuration setup** with smart defaults
+- **Comprehensive CLI** with subcommands
+- **Configuration management** with TOML files
+- **Logging and monitoring** with structured output
+- **Security-first design** with certificate management
 
 ## 🚀 Supported Languages & Frameworks
 
-Nebula automatically detects and supports a wide range of programming languages and frameworks:
-
-### Frontend Frameworks
-- **React** - Next.js, Create React App, Vite
-- **Vue** - Nuxt.js, Vue CLI, Vite  
-- **Angular** - Angular CLI, Nx
-- **Svelte** - SvelteKit, Vite
-- **JavaScript/TypeScript** - Node.js, Express, Fastify
-
-### Backend Languages
-- **Python** - Flask, Django, FastAPI, Streamlit
-- **Go** - Gin, Echo, Gorilla Mux
-- **Rust** - Actix-web, Axum, Warp, Rocket
-- **Java** - Spring Boot, Quarkus, Micronaut
-- **C#** - ASP.NET Core, Blazor
-- **PHP** - Laravel, Symfony, CodeIgniter
-- **Ruby** - Rails, Sinatra
-
-### Other Technologies
-- **Docker** - Docker Compose
-- **Scripts** - Bash, PowerShell
-- **Infrastructure** - Terraform, Ansible
+| Language | Frameworks | Auto-Detected |
+|----------|------------|---------------|
+| **JavaScript/TypeScript** | React, Vue, Svelte, Next.js, Nuxt.js, Angular | ✅ |
+| **Python** | Flask, Django, FastAPI, Streamlit | ✅ |
+| **Go** | Gin, Echo, Fiber, Beego | ✅ |
+| **Rust** | Actix-web, Axum, Warp, Rocket | ✅ |
+| **Java** | Spring Boot, Quarkus, Micronaut | ✅ |
+| **C#** | ASP.NET Core, Blazor | ✅ |
+| **PHP** | Laravel, Symfony, CodeIgniter | ✅ |
+| **Ruby** | Rails, Sinatra, Hanami | ✅ |
+| **C/C++** | Custom build systems | ✅ |
+| **Shell/Bash** | Scripts and automation | ✅ |
+| **Docker** | Containerized applications | ✅ |
 
 ## 🎯 Smart Auto-Detection
 
-Simply run `nebula init` in any project directory and Nebula will:
-1. **Detect your project type** automatically
-2. **Configure optimal settings** for your language/framework
-3. **Set up environment variables** specific to your stack
-4. **Choose the right ports** and commands
-5. **Generate appropriate configuration** files
+Nebula automatically detects your project type by analyzing:
+- **Package managers** (`package.json`, `pyproject.toml`, `go.mod`, `Cargo.toml`)
+- **Framework files** (`next.config.js`, `vue.config.js`, `angular.json`)
+- **Build systems** (`Makefile`, `CMakeLists.txt`, `gradle.build`)
+- **Language indicators** (file extensions, directory structure)
 
-## Features
+## 📦 Installation
 
-### Development Mode
-- 🔒 **Automatic HTTPS** - Self-signed certificates with proper CA
-- 🌐 **Built-in DNS Server** - No external dependencies like dnsmasq
-- 🔄 **Hot Reload** - Automatic restart on file changes  
-- 🖥️ **Cross-Platform** - Works on macOS, Linux, and Windows
-- ⚡ **Zero Configuration** - Works out of the box
-- 🎯 **Universal Language Support** - Auto-detects and supports Python, Go, Rust, Java, C#, PHP, Ruby, JavaScript, TypeScript, React, Vue, Angular, and more
-- 🧠 **Smart Auto-Detection** - Automatically configures optimal settings for your specific language/framework
-- 🏠 **Custom Dev Domains** - Automatic `*.nebula.com` resolution
-
-### Production Mode
-- 🚀 **Built-in Scheduler** - Deploy and manage production applications
-- 🌍 **Custom TLD Support** - Deploy to your own domain (e.g., `app.xyz`)
-- 🔄 **Auto-scaling** - Manage multiple deployments simultaneously
-- 📊 **Health Monitoring** - Built-in health checks and monitoring
-- 🔐 **Production TLS** - Automatic SSL certificate management
-
-## Quick Start
-
-### Installation
+### Quick Install (Recommended)
 
 ```bash
-# macOS/Linux
-curl -fsSL https://get.nebula.dev | sh
+# Unix-like systems (macOS, Linux)
+curl -fsSL https://raw.githubusercontent.com/acruxinc/nebula/main/scripts/install.sh | bash
 
 # Windows (PowerShell)
-iwr https://get.nebula.dev/install.ps1 | iex
+iwr -useb https://raw.githubusercontent.com/acruxinc/nebula/main/scripts/install.ps1 | iex
 ```
 
-### Usage
+### Manual Installation
 
-#### Universal Language Support
+1. **Download the latest release** from [GitHub Releases](https://github.com/acruxinc/nebula/releases)
+2. **Extract the binary** to your PATH
+3. **Run setup** to configure system dependencies:
+
+```bash
+nebula setup
+```
+
+### From Source
+
+```bash
+git clone https://github.com/acruxinc/nebula.git
+cd nebula
+cargo build --release
+sudo cp target/release/nebula /usr/local/bin/
+```
+
+## 🚀 Quick Start
+
+### 1. Initialize Your Project
+
+```bash
+# Auto-detect project type and create configuration
+nebula init
+
+# Or specify a template
+nebula init --template python
+nebula init --template react
+nebula init --template rust
+```
+
+### 2. Start Development Server
+
+```bash
+# Start with auto-detected settings
+nebula
+
+# Or specify custom domain and ports
+nebula --domain myapp.nebula.com --http-port 8080
+```
+
+### 3. Access Your Application
+
+- **HTTP**: `http://myapp.nebula.com:3000`
+- **HTTPS**: `https://myapp.nebula.com:3443` (auto-generated certificates)
+- **Custom domains**: `http://myapp.dev` (with DNS configuration)
+
+## 🎯 Universal Language Support
 
 Nebula works with any programming language or framework. Simply run `nebula init` in your project directory:
 
+### Frontend Frameworks
 ```bash
-# For a Python Flask project
-cd my-flask-app
-nebula init  # Auto-detects Python/Flask and configures accordingly
+# React application
+cd my-react-app
+nebula init  # Auto-detects React and configures npm/yarn
 
-# For a Go web service  
+# Vue.js application  
+cd my-vue-app
+nebula init  # Auto-detects Vue and configures dev server
+
+# Next.js application
+cd my-nextjs-app
+nebula init  # Auto-detects Next.js and configures accordingly
+```
+
+### Backend Services
+```bash
+# Python Flask/Django
+cd my-python-api
+nebula init  # Auto-detects Python and configures appropriate server
+
+# Go web service
 cd my-go-service
 nebula init  # Auto-detects Go and configures Gin/Echo/etc.
 
-# For a React application
-cd my-react-app  
-nebula init  # Auto-detects React and configures npm/yarn
-
-# For a Rust web server
+# Rust web server
 cd my-rust-api
 nebula init  # Auto-detects Rust and configures Actix-web/Axum
 
-# For a Java Spring Boot app
+# Java Spring Boot
 cd my-spring-app
 nebula init  # Auto-detects Java and configures Spring Boot
-
-# For any other language/framework
-nebula init  # Works with PHP, Ruby, C#, Vue, Angular, Svelte, etc.
 ```
 
-#### Development Mode
+### Other Languages
+```bash
+# PHP Laravel/Symfony
+cd my-php-app
+nebula init  # Auto-detects PHP and configures web server
+
+# Ruby on Rails
+cd my-rails-app
+nebula init  # Auto-detects Ruby and configures Rails server
+
+# C# ASP.NET Core
+cd my-dotnet-app
+nebula init  # Auto-detects C# and configures ASP.NET Core
+```
+
+## 🏭 Production Deployment
+
+### 1. Build Your Application
 
 ```bash
-# Initialize Nebula (auto-detects your project type)
-nebula init
-
-# Start development server (uses optimal settings for your language/framework)
-nebula start
-
-# Your app will be available at:
-# HTTP:  http://app.nebula.com:[detected-port]
-# HTTPS: https://app.nebula.com:[https-port]
+# Build your project (language-specific)
+npm run build          # Node.js
+go build              # Go
+cargo build --release # Rust
+# ... etc
 ```
 
-#### Production Deployment
+### 2. Deploy with Nebula Scheduler
 
 ```bash
-# Create a deployment (works with any built application)
-nebula deploy create my-app ./dist --tld xyz
+# Start the production scheduler
+nebula scheduler start
 
-# Start the deployment
-nebula deploy start my-app
+# Deploy your application
+nebula deploy create myapp --path ./dist --tld mycompany.com
 
-# Your app will be available at:
-# HTTPS: https://my-app.xyz
+# Your app is now live at: https://myapp.mycompany.com
 ```
 
-## Commands
+### 3. Manage Deployments
 
-### Development Commands
-- `nebula init` - Initialize Nebula in current directory
-- `nebula start` - Start the development server
-- `nebula stop` - Stop the development server
-- `nebula status` - Show server status
-- `nebula setup` - Install system dependencies
+```bash
+# List all deployments
+nebula deploy list
 
-### DNS Management
-- `nebula dns add <domain> <ip>` - Add DNS record
-- `nebula dns remove <domain>` - Remove DNS record
-- `nebula dns list` - List DNS records
-- `nebula dns test <domain>` - Test DNS resolution
+# Check deployment status
+nebula deploy status myapp
 
-### Certificate Management
-- `nebula cert generate <domain>` - Generate certificate
-- `nebula cert list` - List certificates
-- `nebula cert install-ca` - Install root CA
-- `nebula cert remove <domain>` - Remove certificate
+# Update deployment
+nebula deploy update myapp --path ./new-dist
 
-### Production Deployment
-- `nebula deploy create <name> <build_path> --tld xyz` - Create deployment
-- `nebula deploy start <deployment_id>` - Start deployment
-- `nebula deploy stop <deployment_id>` - Stop deployment
-- `nebula deploy list` - List all deployments
-- `nebula deploy show <deployment_id>` - Show deployment details
-- `nebula deploy delete <deployment_id>` - Delete deployment
+# Remove deployment
+nebula deploy remove myapp
+```
 
-### Utility Commands
-- `nebula clean` - Clean up Nebula files
+## ⚙️ Configuration
 
-## Configuration
+Nebula uses TOML configuration files. The default `nebula.toml` is created during initialization:
 
-Nebula supports both development and production modes through configuration:
-
-### Development Mode
 ```toml
 [server]
 domain = "app.nebula.com"
-mode = "dev"
+http_port = 3000
+https_port = 3443
 command = "npm run dev"
+hot_reload = true
+
+[tls]
+auto_generate = true
+ca_name = "Nebula Development CA"
 
 [dns]
 enabled = true
 port = 53
+upstream = ["8.8.8.8:53", "1.1.1.1:53"]
 
-[scheduler]
-dev_tld = "nebula.com"
-```
-
-### Production Mode
-```toml
-[server]
-mode = "prod"
+[dhcp]
+enabled = false
 
 [scheduler]
 enabled = true
 default_tld = "xyz"
-max_concurrent_deployments = 10
+dev_tld = "nebula.com"
+
+[dev]
+watch_patterns = ["src/**/*", "public/**/*"]
+ignore_patterns = ["node_modules/**/*", ".git/**/*"]
+restart_delay = 500
 ```
 
-## Architecture
+### Configuration Commands
 
-Nebula provides a complete solution without external dependencies:
+```bash
+# Show current configuration
+nebula config show
 
-- **DNS Server**: Built-in DNS server with zone management
-- **DHCP Server**: Full DHCP protocol implementation
-- **TLS Manager**: Automatic certificate generation and management
-- **Scheduler**: Production deployment management
-- **Reverse Proxy**: HTTPS termination and routing
-- **Cross-Platform**: Native implementations for macOS, Linux, and Windows
+# Set configuration values
+nebula config set server.http_port 8080
+nebula config set tls.auto_generate true
 
-## Development Workflow
+# Get configuration values
+nebula config get server.domain
+nebula config get dns.enabled
+```
 
-1. **Initialize**: `nebula init` in your project
-2. **Develop**: `nebula start` - your app runs on `projectname.nebula.com`
-3. **Deploy**: `nebula deploy create myapp ./dist --tld xyz`
-4. **Production**: Your app runs on `myapp.xyz` with automatic HTTPS
+## 🛠️ CLI Commands
+
+### Core Commands
+```bash
+nebula                    # Start development server
+nebula init               # Initialize project configuration
+nebula setup              # Setup system dependencies
+nebula start              # Start as daemon
+nebula stop               # Stop daemon
+nebula status             # Show server status
+```
+
+### Certificate Management
+```bash
+nebula cert generate      # Generate certificates
+nebula cert list          # List certificates
+nebula cert remove <name> # Remove certificate
+nebula cert info <name>   # Show certificate info
+```
+
+### DNS Management
+```bash
+nebula dns start          # Start DNS server
+nebula dns stop           # Stop DNS server
+nebula dns add <name> <ip> # Add DNS record
+nebula dns list           # List DNS records
+nebula dns remove <name>  # Remove DNS record
+```
+
+### Deployment Management
+```bash
+nebula scheduler start    # Start production scheduler
+nebula scheduler stop     # Stop scheduler
+nebula deploy create <name> --path <path> --tld <domain>
+nebula deploy list        # List deployments
+nebula deploy status <name>
+nebula deploy remove <name>
+```
+
+### Utility Commands
+```bash
+nebula clean              # Clean temporary files
+nebula health             # Check system health
+nebula logs               # Show server logs
+nebula version            # Show version info
+```
+
+## 🔧 Advanced Usage
+
+### Custom Domains
+
+```bash
+# Use custom domain
+nebula --domain myapp.local
+
+# Configure custom TLD for production
+nebula deploy create myapp --path ./build --tld mycompany.com
+```
+
+### Environment Variables
+
+```bash
+# Set environment variables
+export NEBULA_DOMAIN=myapp.nebula.com
+export NEBULA_HTTP_PORT=8080
+nebula
+
+# Or use .env file
+echo "NEBULA_DOMAIN=myapp.nebula.com" > .env
+nebula
+```
+
+### Docker Integration
+
+```bash
+# Run Nebula in Docker
+docker run -p 3000:3000 -p 3443:3443 -p 53:53/udp \
+  -v $(pwd):/workspace acruxinc/nebula
+
+# Docker Compose
+version: '3.8'
+services:
+  nebula:
+    image: acruxinc/nebula
+    ports:
+      - "3000:3000"
+      - "3443:3443"
+      - "53:53/udp"
+    volumes:
+      - .:/workspace
+```
+
+### CI/CD Integration
+
+```yaml
+# GitHub Actions example
+name: Deploy with Nebula
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Setup Nebula
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/acruxinc/nebula/main/scripts/install.sh | bash
+          nebula setup
+      - name: Build and Deploy
+        run: |
+          npm run build
+          nebula deploy create ${{ github.event.repository.name }} \
+            --path ./dist \
+            --tld mycompany.com
+```
+
+## 🔒 Security Features
+
+- **Automatic TLS certificate generation** with self-signed CA
+- **Wildcard certificate support** for subdomains
+- **Certificate validation** and expiration monitoring
+- **Secure default configurations**
+- **DNS over HTTPS** support
+- **Firewall rule management** (platform-specific)
+
+## 🐛 Troubleshooting
+
+### Common Issues
+
+**Port conflicts:**
+```bash
+# Check what's using a port
+nebula status --ports
+# Use different port
+nebula --http-port 8080
+```
+
+**Certificate issues:**
+```bash
+# Regenerate certificates
+nebula cert generate --force
+# Check certificate status
+nebula cert info app.nebula.com
+```
+
+**DNS resolution problems:**
+```bash
+# Check DNS configuration
+nebula dns status
+# Test DNS resolution
+dig @127.0.0.1 app.nebula.com
+```
+
+**Permission issues:**
+```bash
+# Run setup to fix permissions
+nebula setup
+# Check system requirements
+nebula health
+```
+
+### Getting Help
+
+- **Documentation**: [docs/](docs/)
+- **Issues**: [GitHub Issues](https://github.com/acruxinc/nebula/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/acruxinc/nebula/discussions)
+- **Discord**: [Join our community](https://discord.gg/nebula)
+
+## 🤝 Contributing
+
+We welcome contributions! Please see our [Contributing Guide](.github/CONTRIBUTING.md) for details.
+
+### Development Setup
+
+```bash
+git clone https://github.com/acruxinc/nebula.git
+cd nebula
+cargo build
+cargo test
+```
+
+### Running Tests
+
+```bash
+# Run all tests
+cargo test
+
+# Run specific test categories
+cargo test --lib                    # Unit tests
+cargo test --test integration_tests # Integration tests
+
+# Run with coverage
+cargo tarpaulin --out Html
+```
+
+## 📄 License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## 🙏 Acknowledgments
+
+- Built with [Rust](https://www.rust-lang.org/) for performance and reliability
+- Uses [Tokio](https://tokio.rs/) for async runtime
+- DNS implementation powered by [trust-dns](https://github.com/bluejekyll/trust-dns)
+- TLS support via [rustls](https://github.com/rustls/rustls)
+- HTTP server built on [Hyper](https://hyper.rs/)
+
+## 📊 Project Status
+
+- ✅ **Core functionality** - Complete
+- ✅ **Cross-platform support** - Complete  
+- ✅ **Universal language detection** - Complete
+- ✅ **Production scheduler** - Complete
+- ✅ **Security features** - Complete
+- ✅ **Documentation** - Complete
+- ✅ **CI/CD pipeline** - Complete
+- 🚧 **Plugin system** - In development
+- 🚧 **Web dashboard** - Planned
+- 🚧 **Metrics collection** - Planned
+
+---
+
+<div align="center">
+  <strong>Made with ❤️ by the Nebula Team</strong>
+  <br>
+  <a href="https://github.com/acruxinc/nebula">⭐ Star us on GitHub</a> |
+  <a href="https://discord.gg/nebula">💬 Join our Discord</a> |
+  <a href="https://twitter.com/nebuladev">🐦 Follow us on Twitter</a>
+</div>
